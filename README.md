@@ -1,0 +1,54 @@
+# KeySight
+
+一款原生 macOS 智能快捷键悬浮窗工具，帮助你减少触控板依赖，从“边看边按”逐步过渡到键盘肌肉记忆。
+
+## 核心特性
+
+- **双模式智能悬浮窗（不抢焦点）**
+  - **长按 `⌘` 瞬间全览**：长按 Command（默认 0.45s，可调 0.30s / 0.45s / 0.65s）即弹出多栏总览面板，松手自动收起；看到目标键可直接补按其余键在原应用触发。
+  - **`⌥⇧K` 常驻悬浮窗**：始终悬浮于桌面和全屏窗口之上，自由拖动缩放并记忆位置，切换应用或界面焦点自动刷新。
+- **当前界面状态感知 + 自动去重补充**
+  - 通过 macOS Accessibility API 实时读取当前前台应用菜单栏的所有快捷键及可用状态，默认自动过滤当前灰色不可用项。
+  - 自动识别当前焦点区域（文本输入区 / 网页浏览区 / 列表视图），智能补充并去重高频免触控板快捷键（如 Emacs 光标移动、空格翻页、访达导航、终端/编辑器及系统级窗口管理）。
+- **全键盘搜索与回车直达执行（`⌥⇧F`）**
+  - 支持按中文功能名、菜单分类或按键名（如 `cmd shift t`、`标签`、`space`）即时过滤。
+  - `↑`/`↓`（或 `⌃N`/`⌃P`）选行，`↩` 直接在目标应用触发，`⌘P` 加入重点练习，`⌘M` 标为已记住，`Esc` 退出并归还焦点。
+- **记忆辅助**
+  - 支持将想练的快捷键 **★ 置顶到「重点练习」**，将已熟练的快捷键 **✓ 标为「已记住」自动隐藏**，随时可在底部抽屉回顾或恢复。
+- **Apple Liquid Glass（液态玻璃）及多套外观材质可选**
+  - 在 macOS 26+ 原生调用 AppKit `NSGlassEffectView`（支持 macOS 27 `effectIsInteractive` 交互式液态玻璃），在旧版 macOS 自动平滑降级。
+  - 内置 4 套材质随时一键切换（悬浮窗顶部按钮 / 菜单栏图标）：
+    1. **液态玻璃** (`Liquid Glass Regular`)
+    2. **晶透液态玻璃** (`Liquid Glass Clear`)
+    3. **经典磨砂玻璃** (`Classic Frosted HUD`)
+    4. **高对比深色卡片** (`Solid Graphite`)
+
+## 构建与运行
+
+需要 macOS 14+ 与 Swift 工具链（Swift 5.10+ / Xcode Command Line Tools）。
+
+```bash
+# 运行核心单元测试
+swift run KeySightCoreTests
+
+# 构建并打包 KeySight.app（生成 dist/KeySight.app）
+./build_app.sh
+
+# 启动应用
+open dist/KeySight.app
+```
+
+首次运行请在「系统设置 → 隐私与安全性 → 辅助功能」中允许 `KeySight`，授权后悬浮窗会自动生效，无需重启。
+
+## 目录结构
+
+```text
+KeySight/
+├── Package.swift
+├── build_app.sh
+├── Sources/
+│   ├── KeySightCore/        # AX 菜单扫描、快捷键位掩码解码、补充键库、搜索与进度持久化
+│   └── KeySightApp/         # 非抢焦点浮窗、长按 ⌘ 与全局热键、Liquid Glass 材质与 SwiftUI 界面
+└── Tests/
+    └── KeySightCoreTests/   # 核心逻辑单元测试
+```
