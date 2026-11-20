@@ -180,10 +180,10 @@ public enum HUDDisplayMode: String, Codable, Sendable {
 }
 
 public enum HUDAppearanceStyle: String, CaseIterable, Codable, Identifiable, Sendable {
-    /// Apple macOS 26+ native Liquid Glass (Regular)
-    case liquidGlass
-    /// Apple macOS 26+ native Liquid Glass (Clear)
+    /// Apple macOS 26+ native Liquid Glass Clear (Dock-style pure optical refraction)
     case liquidGlassClear
+    /// Apple macOS 26+ native Liquid Glass Regular (adaptive frosted optical glass)
+    case liquidGlass
     /// Classic macOS NSVisualEffectView frosted HUD
     case frostedHUD
     /// High-contrast opaque-tinted dark card
@@ -193,8 +193,8 @@ public enum HUDAppearanceStyle: String, CaseIterable, Codable, Identifiable, Sen
 
     public var displayName: String {
         switch self {
-        case .liquidGlass: return "液态玻璃"
-        case .liquidGlassClear: return "晶透玻璃"
+        case .liquidGlassClear: return "程序坞玻璃"
+        case .liquidGlass: return "标准液态玻璃"
         case .frostedHUD: return "经典磨砂"
         case .solidGraphite: return "高对比深色"
         }
@@ -202,8 +202,8 @@ public enum HUDAppearanceStyle: String, CaseIterable, Codable, Identifiable, Sen
 
     public var menuDescription: String {
         switch self {
-        case .liquidGlass: return "液态玻璃 (Apple Liquid Glass · 推荐)"
-        case .liquidGlassClear: return "晶透液态玻璃 (Clear Liquid Glass)"
+        case .liquidGlassClear: return "程序坞同款液态玻璃 (Dock Clear Glass · 推荐)"
+        case .liquidGlass: return "标准液态玻璃 (Liquid Glass Regular)"
         case .frostedHUD: return "经典磨砂玻璃 (Frosted HUD)"
         case .solidGraphite: return "高对比深色卡片 (Solid Graphite)"
         }
@@ -211,8 +211,8 @@ public enum HUDAppearanceStyle: String, CaseIterable, Codable, Identifiable, Sen
 
     public var systemSymbol: String {
         switch self {
-        case .liquidGlass: return "drop.halffull"
         case .liquidGlassClear: return "sparkles.rectangle.stack"
+        case .liquidGlass: return "drop.halffull"
         case .frostedHUD: return "square.on.square.dashed"
         case .solidGraphite: return "moon.fill"
         }
@@ -224,7 +224,7 @@ public enum HUDAppearanceStyle: String, CaseIterable, Codable, Identifiable, Sen
 
     public var next: HUDAppearanceStyle {
         let all = Self.allCases
-        guard let idx = all.firstIndex(of: self) else { return .liquidGlass }
+        guard let idx = all.firstIndex(of: self) else { return .liquidGlassClear }
         return all[(idx + 1) % all.count]
     }
 }

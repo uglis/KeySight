@@ -123,7 +123,7 @@ final class KeySightViewModel: ObservableObject {
            let savedStyle = HUDAppearanceStyle(rawValue: savedStyleRaw) {
             self.appearanceStyle = savedStyle
         } else {
-            self.appearanceStyle = .liquidGlass
+            self.appearanceStyle = .liquidGlassClear
         }
 
         self.isAccessibilityGranted = AccessibilityScanner.isAccessibilityTrusted(prompt: false)

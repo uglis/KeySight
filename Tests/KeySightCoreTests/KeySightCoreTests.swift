@@ -197,11 +197,11 @@ struct KeySightCoreTestRunner {
     }
 
     static func testAppearanceStyles() {
-        check(HUDAppearanceStyle.liquidGlass.isLiquidGlass == true, "liquidGlass is liquid glass")
         check(HUDAppearanceStyle.liquidGlassClear.isLiquidGlass == true, "liquidGlassClear is liquid glass")
+        check(HUDAppearanceStyle.liquidGlass.isLiquidGlass == true, "liquidGlass is liquid glass")
         check(HUDAppearanceStyle.frostedHUD.isLiquidGlass == false, "frostedHUD is classic frosted")
         check(HUDAppearanceStyle.solidGraphite.isLiquidGlass == false, "solidGraphite is solid")
-        check(HUDAppearanceStyle.liquidGlass.next == .liquidGlassClear, "cycles to next style")
-        check(HUDAppearanceStyle.solidGraphite.next == .liquidGlass, "wraps around to liquidGlass")
+        check(HUDAppearanceStyle.liquidGlassClear.next == .liquidGlass, "cycles to next style")
+        check(HUDAppearanceStyle.solidGraphite.next == .liquidGlassClear, "wraps around to liquidGlassClear")
     }
 }

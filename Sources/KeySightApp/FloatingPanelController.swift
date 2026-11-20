@@ -59,27 +59,40 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
     func applyAppearanceStyle(_ style: HUDAppearanceStyle) {
         if #available(macOS 26.0, *), style.isLiquidGlass {
             let glassView: NSGlassEffectView
-            if let existing = panel.contentView as? NSGlassEffectView {
+            if let container = panel.contentView as? NSGlassEffectContainerView,
+               let existing = container.contentView as? NSGlassEffectView {
                 glassView = existing
             } else {
-                glassView = NSGlassEffectView(frame: panel.contentLayoutRect)
+                let container = NSGlassEffectContainerView(frame: panel.contentLayoutRect)
+                container.autoresizingMask = [.width, .height]
+                container.spacing = 12
+
+                // Slight breathing inset inside the transparent borderless panel prevents
+                // WindowServer from clipping the curved outer optical lensing & specular rim.
+                let insetRect = container.bounds.insetBy(dx: 6, dy: 6)
+                glassView = NSGlassEffectView(frame: insetRect)
                 glassView.autoresizingMask = [.width, .height]
+
                 hostingView.removeFromSuperview()
                 hostingView.frame = glassView.bounds
                 hostingView.autoresizingMask = [.width, .height]
                 glassView.contentView = hostingView
-                panel.contentView = glassView
+
+                container.contentView = glassView
+                panel.contentView = container
             }
 
-            glassView.cornerRadius = 22
             switch style {
+            case .liquidGlassClear:
+                // Authentic macOS Dock Liquid Glass: pure .clear optical lensing, no milky tint, lush 26pt squircle
+                glassView.style = .clear
+                glassView.tintColor = nil
+                glassView.cornerRadius = 26
             case .liquidGlass:
+                // Standard macOS 26/27 Liquid Glass: adaptive frosted refraction with higher contrast over dense text
                 glassView.style = .regular
                 glassView.tintColor = nil
-            case .liquidGlassClear:
-                glassView.style = .clear
-                // Subtle adaptive veil keeps keycap typography razor-sharp over bright wallpapers
-                glassView.tintColor = NSColor.windowBackgroundColor.withAlphaComponent(0.08)
+                glassView.cornerRadius = 24
             default:
                 break
             }
@@ -90,8 +103,12 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             panel.invalidateShadow()
         } else {
             if panel.contentView !== hostingView {
-                if #available(macOS 26.0, *), let existingGlass = panel.contentView as? NSGlassEffectView {
-                    existingGlass.contentView = nil
+                if #available(macOS 26.0, *),
+                   let container = panel.contentView as? NSGlassEffectContainerView {
+                    if let existingGlass = container.contentView as? NSGlassEffectView {
+                        existingGlass.contentView = nil
+                    }
+                    container.contentView = nil
                 }
                 hostingView.removeFromSuperview()
                 hostingView.frame = panel.contentLayoutRect

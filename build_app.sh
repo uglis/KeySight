@@ -26,6 +26,15 @@ mkdir -p "$MACOS_DIR" "$RESOURCES_DIR"
 cp "$BIN_PATH" "$MACOS_DIR/$APP_NAME"
 chmod +x "$MACOS_DIR/$APP_NAME"
 
+# Stamp current macOS SDK version into LC_BUILD_VERSION so macOS 26+/27 enables full native Liquid Glass
+# instead of pre-Tahoe compatibility mode (SwiftPM defaults LC_BUILD_VERSION sdk to the min deployment target).
+SDK_VER="$(xcrun --show-sdk-version 2>/dev/null || echo "26.0")"
+if command -v vtool >/dev/null 2>&1; then
+    echo "✨ Stamping LC_BUILD_VERSION (minos 14.0, sdk $SDK_VER) for native Liquid Glass..."
+    vtool -set-build-version macos 14.0 "$SDK_VER" -replace \
+        -output "$MACOS_DIR/$APP_NAME" "$MACOS_DIR/$APP_NAME"
+fi
+
 # Generate bespoke AppIcon.icns directly using CoreGraphics + CoreText + standard ICNS container
 ICON_TMP="$PROJECT_DIR/.build/icon_tmp"
 rm -rf "$ICON_TMP"

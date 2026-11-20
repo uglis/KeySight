@@ -162,3 +162,37 @@ struct MiniToggleChip: View {
         .buttonStyle(.plain)
     }
 }
+
+extension View {
+    /// Applies native macOS 26+ Liquid Glass capsule/rounded-rect styling to floating interior controls.
+    @ViewBuilder
+    func adaptiveGlassCapsule(enabled: Bool, interactive: Bool = true, tint: Color? = nil) -> some View {
+        if enabled {
+            if #available(macOS 26.0, *) {
+                let base: Glass = interactive ? .clear.interactive() : .clear
+                let styled: Glass = (tint != nil) ? base.tint(tint) : base
+                self.glassEffect(styled, in: .capsule)
+            } else {
+                self
+                    .background(Capsule(style: .continuous).fill(tint?.opacity(0.18) ?? Color.primary.opacity(0.08)))
+                    .overlay(Capsule(style: .continuous).strokeBorder(Color.white.opacity(0.24), lineWidth: 0.75))
+            }
+        } else {
+            self
+                .background(Capsule(style: .continuous).fill(tint?.opacity(0.16) ?? Color.primary.opacity(0.07)))
+        }
+    }
+
+    @ViewBuilder
+    func adaptiveGlassCircle(enabled: Bool) -> some View {
+        if enabled {
+            if #available(macOS 26.0, *) {
+                self.glassEffect(.clear.interactive(), in: .circle)
+            } else {
+                self.background(Circle().fill(Color.primary.opacity(0.08)))
+            }
+        } else {
+            self.background(Circle().fill(Color.primary.opacity(0.06)))
+        }
+    }
+}

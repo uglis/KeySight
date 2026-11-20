@@ -11,7 +11,11 @@ struct HUDRootView: View {
     }
 
     private var cornerRadius: CGFloat {
-        viewModel.appearanceStyle.isLiquidGlass ? 22 : 16
+        switch viewModel.appearanceStyle {
+        case .liquidGlassClear: return 26
+        case .liquidGlass: return 24
+        case .frostedHUD, .solidGraphite: return 16
+        }
     }
 
     private var usesNativeLiquidGlass: Bool {
@@ -191,7 +195,7 @@ struct HUDRootView: View {
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
-                            .background(Circle().fill(Color.primary.opacity(0.06)))
+                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
                     }
                     .buttonStyle(.plain)
                     .help("立即刷新当前界面快捷键")
@@ -203,7 +207,7 @@ struct HUDRootView: View {
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
-                            .background(Circle().fill(Color.primary.opacity(0.06)))
+                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
                     }
                     .buttonStyle(.plain)
                     .help("隐藏悬浮窗 (⌥⇧K)")
@@ -253,7 +257,7 @@ struct HUDRootView: View {
                     .font(.system(size: 11.5, weight: .semibold))
                     .foregroundStyle(viewModel.appearanceStyle.isLiquidGlass ? Color.accentColor : Color.secondary)
                     .frame(width: 24, height: 24)
-                    .background(Circle().fill(Color.primary.opacity(0.06)))
+                    .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
             }
         }
         .menuStyle(.borderlessButton)
@@ -320,13 +324,20 @@ struct HUDRootView: View {
                     .padding(.vertical, 2)
                     .background(
                         RoundedRectangle(cornerRadius: 4, style: .continuous)
-                            .fill(Color.primary.opacity(0.06))
+                            .fill(Color.primary.opacity(0.07))
                     )
             }
         }
         .padding(.horizontal, 12)
-        .padding(.vertical, 8)
-        .background(Color.primary.opacity(viewModel.isSearchActive ? 0.07 : 0.03))
+        .padding(.vertical, 7)
+        .adaptiveGlassCapsule(
+            enabled: viewModel.appearanceStyle.isLiquidGlass,
+            interactive: true,
+            tint: viewModel.isSearchActive ? Color.accentColor.opacity(0.18) : nil
+        )
+        .padding(.horizontal, viewModel.appearanceStyle.isLiquidGlass ? 10 : 0)
+        .padding(.top, viewModel.appearanceStyle.isLiquidGlass ? 8 : 0)
+        .padding(.bottom, viewModel.appearanceStyle.isLiquidGlass ? 4 : 0)
     }
 
     // MARK: - Category Filter Pills
@@ -356,12 +367,20 @@ struct HUDRootView: View {
         Button(action: action) {
             Text(title)
                 .font(.system(size: 11, weight: isSelected ? .semibold : .medium))
-                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.8))
-                .padding(.horizontal, 9)
-                .padding(.vertical, 4)
+                .foregroundStyle(isSelected ? Color.white : Color.primary.opacity(0.86))
+                .padding(.horizontal, 10)
+                .padding(.vertical, 4.5)
+                .adaptiveGlassCapsule(
+                    enabled: viewModel.appearanceStyle.isLiquidGlass,
+                    interactive: true,
+                    tint: isSelected ? Color.accentColor : nil
+                )
                 .background(
-                    Capsule(style: .continuous)
-                        .fill(isSelected ? Color.accentColor : Color.primary.opacity(0.07))
+                    Group {
+                        if !viewModel.appearanceStyle.isLiquidGlass && isSelected {
+                            Capsule(style: .continuous).fill(Color.accentColor)
+                        }
+                    }
                 )
         }
         .buttonStyle(.plain)
