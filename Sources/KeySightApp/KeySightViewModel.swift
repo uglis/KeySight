@@ -197,6 +197,33 @@ final class KeySightViewModel: ObservableObject {
         startPermissionPolling()
     }
 
+    /// Clears a stale macOS TCC Accessibility entry (which happens after rebuilding an ad-hoc signed app
+    /// when System Settings still displays the old signature's checkbox as enabled) and re-opens Settings.
+    func resetAndRequestAccessibilityPermission() {
+        let bundleID = Bundle.main.bundleIdentifier ?? "com.xinque.KeySight"
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/tccutil")
+        task.arguments = ["reset", "Accessibility", bundleID]
+        try? task.run()
+        task.waitUntilExit()
+
+        showToast("已清理旧授权记录，请在系统设置中重新勾选 KeySight")
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.25) { [weak self] in
+            self?.requestAccessibilityPermission()
+        }
+    }
+
+    func relaunchApp() {
+        let bundleURL = Bundle.main.bundleURL
+        let config = NSWorkspace.OpenConfiguration()
+        config.createsNewApplicationInstance = true
+        NSWorkspace.shared.openApplication(at: bundleURL, configuration: config) { _, _ in
+            Task { @MainActor in
+                NSApp.terminate(nil)
+            }
+        }
+    }
+
     func refreshPermissionStatus() {
         isAccessibilityGranted = AccessibilityScanner.isAccessibilityTrusted(prompt: false)
         if isAccessibilityGranted {

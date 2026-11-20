@@ -240,6 +240,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         permItem.target = self
         menu.addItem(permItem)
 
+        if !trusted {
+            let resetPermItem = NSMenuItem(
+                title: "重置旧授权记录并重新授权（已勾选仍无效时点此）",
+                action: #selector(menuResetAccessibilityPermission),
+                keyEquivalent: ""
+            )
+            resetPermItem.target = self
+            menu.addItem(resetPermItem)
+        }
+
         menu.addItem(.separator())
 
         let quitItem = NSMenuItem(title: "退出 KeySight", action: #selector(menuQuit), keyEquivalent: "q")
@@ -285,6 +295,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuOpenAccessibilitySettings() {
         viewModel.requestAccessibilityPermission()
+    }
+
+    @objc private func menuResetAccessibilityPermission() {
+        viewModel.resetAndRequestAccessibilityPermission()
     }
 
     @objc private func menuQuit() {

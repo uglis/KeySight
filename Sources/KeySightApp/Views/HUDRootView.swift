@@ -273,16 +273,31 @@ struct HUDRootView: View {
             Image(systemName: "exclamationmark.triangle.fill")
                 .foregroundStyle(.orange)
                 .font(.system(size: 12))
-            Text("尚未授予辅助功能权限，暂无法读取当前应用实时菜单。")
-                .font(.system(size: 11.5))
-                .foregroundStyle(.primary.opacity(0.9))
-                .lineLimit(2)
-            Spacer()
-            Button("去授权") {
-                viewModel.requestAccessibilityPermission()
+            VStack(alignment: .leading, spacing: 2) {
+                Text("尚未识别到辅助功能授权，暂无法读取当前应用实时菜单。")
+                    .font(.system(size: 11.5, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.92))
+                    .lineLimit(2)
+                Text("若系统设置中已勾选仍提示，点右侧「重置授权」即可修复更新后的签名残留。")
+                    .font(.system(size: 10))
+                    .foregroundStyle(.secondary)
+                    .lineLimit(2)
             }
-            .buttonStyle(.borderedProminent)
-            .controlSize(.mini)
+            Spacer(minLength: 4)
+            HStack(spacing: 5) {
+                Button("重置授权") {
+                    viewModel.resetAndRequestAccessibilityPermission()
+                }
+                .buttonStyle(.bordered)
+                .controlSize(.mini)
+                .help("清理更新前残留的旧签名授权记录，然后重新授权")
+
+                Button("去授权") {
+                    viewModel.requestAccessibilityPermission()
+                }
+                .buttonStyle(.borderedProminent)
+                .controlSize(.mini)
+            }
         }
         .padding(.horizontal, 14)
         .padding(.vertical, 8)
