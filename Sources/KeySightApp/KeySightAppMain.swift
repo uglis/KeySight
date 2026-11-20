@@ -3,10 +3,15 @@ import SwiftUI
 import KeySightCore
 
 @main
+@MainActor
 struct KeySightLauncher {
+    // NSApplication.delegate is weak, so keep a strong reference for the full app lifetime
+    private static var appDelegate: AppDelegate?
+
     static func main() {
         let app = NSApplication.shared
         let delegate = AppDelegate()
+        Self.appDelegate = delegate
         app.delegate = delegate
         app.setActivationPolicy(.accessory)
         app.run()
