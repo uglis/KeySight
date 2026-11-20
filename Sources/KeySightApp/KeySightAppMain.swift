@@ -80,11 +80,27 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         hotkeyManager.onCommandHoldEnd = { [weak self] in
             self?.panelController.hidePeekOverlay()
         }
+        hotkeyManager.onHeldModifiersChanged = { [weak self] mods in
+            self?.viewModel.liveHeldModifiers = mods
+        }
+        hotkeyManager.onPromoteOverlayToSearch = { [weak self] in
+            self?.panelController.promoteOverlayToSearch()
+        }
+        hotkeyManager.onOverlayPageStep = { [weak self] delta in
+            self?.viewModel.stepOverlayPage(delta: delta)
+        }
+        hotkeyManager.canPageOverlay = { [weak self] in
+            (self?.viewModel.overlayPages.count ?? 0) > 1
+        }
         hotkeyManager.onTogglePinnedHUD = { [weak self] in
             self?.panelController.togglePinnedHUD()
         }
         hotkeyManager.onOpenSearchMode = { [weak self] in
             self?.panelController.openSearchMode()
+        }
+
+        viewModel.onAccessibilityGranted = { [weak self] in
+            self?.hotkeyManager.ensureOverlayEventTapIfTrusted()
         }
 
         viewModel.onPreferenceChanged = { [weak self] in
@@ -220,6 +236,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         enabledOnlyItem.state = viewModel.onlyEnabled ? .on : .off
         menu.addItem(enabledOnlyItem)
 
+        let hideBasicItem = NSMenuItem(
+            title: "隐藏通用基础键 (⌘C/V/X/Z/A/S/W/Q 等)",
+            action: #selector(menuToggleHideBasic),
+            keyEquivalent: ""
+        )
+        hideBasicItem.target = self
+        hideBasicItem.state = viewModel.hideBasicShortcuts ? .on : .off
+        menu.addItem(hideBasicItem)
+
         let suppItem = NSMenuItem(
             title: "包含系统/常用软件免触控板推荐",
             action: #selector(menuToggleSupplemental),
@@ -287,6 +312,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc private func menuToggleOnlyEnabled() {
         viewModel.onlyEnabled.toggle()
+    }
+
+    @objc private func menuToggleHideBasic() {
+        viewModel.hideBasicShortcuts.toggle()
     }
 
     @objc private func menuToggleSupplemental() {

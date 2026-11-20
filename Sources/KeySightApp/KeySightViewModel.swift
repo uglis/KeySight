@@ -34,6 +34,18 @@ final class KeySightViewModel: ObservableObject {
     @Published var showMasteredDrawer: Bool = false
     @Published var toastMessage: String?
 
+    // Hold-⌘ zero-trackpad state: live Which-Key modifier chord filter + fixed-height pagination
+    @Published var liveHeldModifiers: KeyModifiers = [] {
+        didSet {
+            if liveHeldModifiers != oldValue {
+                overlayPageIndex = 0
+                recomputeViewResult()
+            }
+        }
+    }
+    @Published var overlayPages: [OverlayPage] = []
+    @Published var overlayPageIndex: Int = 0
+
     @Published var viewResult: ShortcutViewResult = ShortcutViewResult(
         groups: [],
         flatVisibleItems: [],
@@ -62,6 +74,14 @@ final class KeySightViewModel: ObservableObject {
             recomputeViewResult()
         }
     }
+    @Published var hideBasicShortcuts: Bool {
+        didSet {
+            UserDefaults.standard.set(hideBasicShortcuts, forKey: Keys.hideBasicShortcuts)
+            overlayPageIndex = 0
+            recomputeViewResult()
+            onPreferenceChanged?()
+        }
+    }
     @Published var isCommandHoldEnabled: Bool {
         didSet {
             UserDefaults.standard.set(isCommandHoldEnabled, forKey: Keys.commandHoldEnabled)
@@ -84,6 +104,7 @@ final class KeySightViewModel: ObservableObject {
 
     var onPreferenceChanged: (() -> Void)?
     var onAppearanceChanged: ((HUDAppearanceStyle) -> Void)?
+    var onAccessibilityGranted: (() -> Void)?
     var onRequestPinFromOverlay: (() -> Void)?
     var onRequestDismissSearch: (() -> Void)?
     var onRequestCloseHUD: (() -> Void)?
@@ -106,6 +127,7 @@ final class KeySightViewModel: ObservableObject {
         static let onlyEnabled = "ks.onlyEnabled"
         static let includeSupplemental = "ks.includeSupplemental"
         static let hideMastered = "ks.hideMastered"
+        static let hideBasicShortcuts = "ks.hideBasicShortcuts"
         static let commandHoldEnabled = "ks.commandHoldEnabled"
         static let commandHoldDelay = "ks.commandHoldDelay"
         static let appearanceStyle = "ks.appearanceStyle"
@@ -116,6 +138,7 @@ final class KeySightViewModel: ObservableObject {
         self.onlyEnabled = ud.object(forKey: Keys.onlyEnabled) as? Bool ?? true
         self.includeSupplemental = ud.object(forKey: Keys.includeSupplemental) as? Bool ?? true
         self.hideMastered = ud.object(forKey: Keys.hideMastered) as? Bool ?? true
+        self.hideBasicShortcuts = ud.object(forKey: Keys.hideBasicShortcuts) as? Bool ?? true
         self.isCommandHoldEnabled = ud.object(forKey: Keys.commandHoldEnabled) as? Bool ?? true
         let savedDelay = ud.double(forKey: Keys.commandHoldDelay)
         self.commandHoldDelay = savedDelay > 0.1 ? savedDelay : 0.45
@@ -181,6 +204,7 @@ final class KeySightViewModel: ObservableObject {
                     self.isAccessibilityGranted = true
                     timer.invalidate()
                     self.permissionTimer = nil
+                    self.onAccessibilityGranted?()
                     self.captureFrontmostAppIfExternal()
                     self.scanCurrentTargetApp(silent: false)
                     self.showToast("辅助功能已授权，已开始实时抓取当前界面快捷键")
@@ -290,6 +314,25 @@ final class KeySightViewModel: ObservableObject {
         }
     }
 
+    /// Only engages live modifier filtering in Peek Overlay when user adds ⇧ / ⌥ / ⌃ on top of ⌘.
+    var activeChordFilter: KeyModifiers? {
+        guard displayMode == .peekOverlay else { return nil }
+        let extra = liveHeldModifiers.subtracting(.command)
+        return extra.isEmpty ? nil : liveHeldModifiers
+    }
+
+    var currentOverlayPage: OverlayPage? {
+        guard !overlayPages.isEmpty else { return nil }
+        let idx = max(0, min(overlayPageIndex, overlayPages.count - 1))
+        return overlayPages[idx]
+    }
+
+    func stepOverlayPage(delta: Int) {
+        let count = overlayPages.count
+        guard count > 1 else { return }
+        overlayPageIndex = (overlayPageIndex + delta + count) % count
+    }
+
     func recomputeViewResult() {
         let snapshot = currentSnapshot ?? AppScanSnapshot(
             pid: targetApp?.processIdentifier ?? 0,
@@ -304,6 +347,8 @@ final class KeySightViewModel: ObservableObject {
             onlyEnabled: onlyEnabled,
             includeSupplemental: includeSupplemental,
             hideMastered: hideMastered,
+            hideBasicShortcuts: hideBasicShortcuts,
+            requiredModifiers: activeChordFilter,
             selectedCategory: selectedCategory
         )
 
@@ -314,6 +359,17 @@ final class KeySightViewModel: ObservableObject {
         )
 
         viewResult = result
+
+        // Compute zero-scroll paginated columns for Hold-⌘ Peek Overlay (4 compact columns × 16 units)
+        let pages = ShortcutSearchEngine.paginateGroupsForOverlay(
+            result.groups,
+            columnsPerPage: 4,
+            maxUnitsPerColumn: 16
+        )
+        overlayPages = pages
+        if overlayPageIndex >= pages.count {
+            overlayPageIndex = max(0, pages.count - 1)
+        }
 
         // Keep selectedCategory valid when switching apps
         if let cat = selectedCategory, !result.availableCategories.contains(cat) {

@@ -1,10 +1,16 @@
 import AppKit
 import Carbon
+import KeySightCore
 
 @MainActor
 final class GlobalHotkeyManager {
     var onCommandHoldStart: (() -> Void)?
     var onCommandHoldEnd: (() -> Void)?
+    var onHeldModifiersChanged: ((KeyModifiers) -> Void)?
+    var onPromoteOverlayToSearch: (() -> Void)?
+    var onOverlayPageStep: ((Int) -> Void)?
+    var canPageOverlay: (() -> Bool)?
+
     var onTogglePinnedHUD: (() -> Void)?
     var onOpenSearchMode: (() -> Void)?
 
@@ -24,7 +30,11 @@ final class GlobalHotkeyManager {
     private var localInterruptMonitor: Any?
 
     private var holdWorkItem: DispatchWorkItem?
-    private var isHoldActive: Bool = false
+    fileprivate var isHoldActive: Bool = false
+
+    // Active-only CGEventTap to cleanly intercept Space / '/' / ← / → while Hold-⌘ Overlay is open
+    fileprivate var overlayEventTap: CFMachPort?
+    private var overlayTapSource: CFRunLoopSource?
 
     private var hotKeyHandlerRef: EventHandlerRef?
     private var togglePinHotKeyRef: EventHotKeyRef?
@@ -37,6 +47,7 @@ final class GlobalHotkeyManager {
     func start() {
         installEventMonitors()
         registerCarbonHotKeys()
+        ensureOverlayEventTapIfTrusted()
     }
 
     func stop() {
@@ -50,6 +61,15 @@ final class GlobalHotkeyManager {
         globalInterruptMonitor = nil
         localInterruptMonitor = nil
 
+        if let tap = overlayEventTap {
+            CGEvent.tapEnable(tap: tap, enable: false)
+        }
+        if let src = overlayTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+        }
+        overlayEventTap = nil
+        overlayTapSource = nil
+
         if let ref = togglePinHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = searchHotKeyRef { UnregisterEventHotKey(ref) }
         if let handler = hotKeyHandlerRef { RemoveEventHandler(handler) }
@@ -58,7 +78,94 @@ final class GlobalHotkeyManager {
         hotKeyHandlerRef = nil
     }
 
-    // MARK: - Hold Command Detection
+    /// Call once Accessibility permission is granted so the active-only event tap becomes available immediately.
+    func ensureOverlayEventTapIfTrusted() {
+        guard overlayEventTap == nil, AccessibilityScanner.isAccessibilityTrusted(prompt: false) else { return }
+
+        let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
+        let userInfo = Unmanaged.passUnretained(self).toOpaque()
+
+        guard let tap = CGEvent.tapCreate(
+            tap: .cgSessionEventTap,
+            place: .headInsertEventTap,
+            options: .defaultTap,
+            eventsOfInterest: mask,
+            callback: { _, type, event, userInfo -> Unmanaged<CGEvent>? in
+                guard let userInfo else { return Unmanaged.passUnretained(event) }
+                let manager = Unmanaged<GlobalHotkeyManager>.fromOpaque(userInfo).takeUnretainedValue()
+                return MainActor.assumeIsolated {
+                    manager.handleOverlayTapEvent(type: type, event: event)
+                }
+            },
+            userInfo: userInfo
+        ) else {
+            return
+        }
+
+        let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
+        CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
+        CGEvent.tapEnable(tap: tap, enable: false)
+
+        self.overlayEventTap = tap
+        self.overlayTapSource = source
+    }
+
+    private func setOverlayTapEnabled(_ enabled: Bool) {
+        if enabled {
+            ensureOverlayEventTapIfTrusted()
+        }
+        if let tap = overlayEventTap {
+            CGEvent.tapEnable(tap: tap, enable: enabled)
+        }
+    }
+
+    private func handleOverlayTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
+        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
+            if let tap = overlayEventTap {
+                CGEvent.tapEnable(tap: tap, enable: isHoldActive)
+            }
+            return Unmanaged.passUnretained(event)
+        }
+
+        guard isHoldActive, type == .keyDown else {
+            return Unmanaged.passUnretained(event)
+        }
+
+        let keyCode = UInt16(event.getIntegerValueField(.keyboardEventKeycode))
+        let flags = event.flags
+        let onlyCommand = flags.contains(.maskCommand)
+            && !flags.contains(.maskShift)
+            && !flags.contains(.maskAlternate)
+            && !flags.contains(.maskControl)
+
+        // While Hold-⌘ Overlay is open:
+        // 1) Space (0x31) or '/' (0x2C) with only ⌘ -> Lock HUD & jump straight into Search Mode!
+        if onlyCommand && (keyCode == 0x31 || keyCode == 0x2C) {
+            resetHoldStateWithoutDismiss()
+            onPromoteOverlayToSearch?()
+            return nil // Consume so Spotlight / '/' does not trigger!
+        }
+
+        // 2) ← / → (or ↑ / ↓) with only ⌘ when multiple overlay pages exist -> Keyboard paging!
+        if onlyCommand && (canPageOverlay?() == true) {
+            switch keyCode {
+            case 0x7B, 0x7E: // Left or Up -> Previous page
+                onOverlayPageStep?(-1)
+                return nil
+            case 0x7C, 0x7D: // Right or Down -> Next page
+                onOverlayPageStep?(1)
+                return nil
+            default:
+                break
+            }
+        }
+
+        // Any other key (e.g. ⌘T, ⌘⇧N, ⌘W): pass through to the active app & auto-dismiss overlay!
+        cancelPendingHold(notifyEnd: true)
+        return Unmanaged.passUnretained(event)
+    }
+
+    // MARK: - Hold Command Detection & Live Modifier Chord Filtering
 
     private func installEventMonitors() {
         globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
@@ -74,18 +181,25 @@ final class GlobalHotkeyManager {
         }
 
         let interruptMask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-        globalInterruptMonitor = NSEvent.addGlobalMonitorForEvents(matching: interruptMask) { [weak self] _ in
+        globalInterruptMonitor = NSEvent.addGlobalMonitorForEvents(matching: interruptMask) { [weak self] event in
             Task { @MainActor in
+                // If our active-only event tap is running, keyDown is handled cleanly there;
+                // mouse clicks still dismiss immediately.
+                if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
+                    return
+                }
                 self?.handleInterruptEvent()
             }
         }
         localInterruptMonitor = NSEvent.addLocalMonitorForEvents(matching: interruptMask) { [weak self] event in
             Task { @MainActor in
-                // Don't cancel if the user clicked inside KeySight's own overlay (e.g. clicking "钉住" button!)
                 if event.type == .leftMouseDown || event.type == .rightMouseDown {
                     if event.window != nil {
                         return
                     }
+                }
+                if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
+                    return
                 }
                 self?.handleInterruptEvent()
             }
@@ -100,12 +214,16 @@ final class GlobalHotkeyManager {
         let active = rawFlags.intersection(relevant)
 
         if active == .command {
-            // Only Command is currently held -> start hold timer if not already running/active
-            guard holdWorkItem == nil && !isHoldActive else { return }
+            if isHoldActive {
+                // User released ⇧/⌥/⌃ while still holding ⌘ -> reset live chord filter back to all
+                onHeldModifiersChanged?([.command])
+                return
+            }
+
+            guard holdWorkItem == nil else { return }
 
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
-                // Double-check live hardware modifier state right before showing
                 let liveFlags = NSEvent.modifierFlags.intersection([.command, .option, .control, .shift])
                 guard liveFlags == .command else {
                     self.holdWorkItem = nil
@@ -113,6 +231,8 @@ final class GlobalHotkeyManager {
                 }
                 self.isHoldActive = true
                 self.holdWorkItem = nil
+                self.setOverlayTapEnabled(true)
+                self.onHeldModifiersChanged?([.command])
                 self.onCommandHoldStart?()
             }
             holdWorkItem = work
@@ -121,16 +241,27 @@ final class GlobalHotkeyManager {
             // Command released
             cancelPendingHold(notifyEnd: isHoldActive)
         } else {
-            // Another modifier was added alongside Command (e.g. user is pressing ⌘⇧...)
-            if !isHoldActive {
-                // User is executing a multi-modifier shortcut quickly; cancel timer so overlay doesn't pop up
+            // Another modifier was added alongside Command (e.g. ⌘⇧ / ⌘⌥ / ⌘⌃)
+            if isHoldActive {
+                // Live Which-Key modifier filtering!
+                onHeldModifiersChanged?(Self.convertModifiers(active))
+            } else {
+                // User is executing a quick multi-modifier shortcut before the hold delay elapsed -> cancel
                 cancelPendingHold(notifyEnd: false)
             }
         }
     }
 
+    private static func convertModifiers(_ flags: NSEvent.ModifierFlags) -> KeyModifiers {
+        var mods: KeyModifiers = []
+        if flags.contains(.control) { mods.insert(.control) }
+        if flags.contains(.option)  { mods.insert(.option) }
+        if flags.contains(.shift)   { mods.insert(.shift) }
+        if flags.contains(.command) { mods.insert(.command) }
+        return mods
+    }
+
     private func handleInterruptEvent() {
-        // Any keypress or external click cancels a pending hold, or dismisses an active peek overlay
         cancelPendingHold(notifyEnd: isHoldActive)
     }
 
@@ -138,6 +269,8 @@ final class GlobalHotkeyManager {
         holdWorkItem?.cancel()
         holdWorkItem = nil
         isHoldActive = false
+        setOverlayTapEnabled(false)
+        onHeldModifiersChanged?([])
     }
 
     private func cancelPendingHold(notifyEnd: Bool) {
@@ -145,6 +278,8 @@ final class GlobalHotkeyManager {
         holdWorkItem = nil
         let wasActive = isHoldActive
         isHoldActive = false
+        setOverlayTapEnabled(false)
+        onHeldModifiersChanged?([])
         if notifyEnd && wasActive {
             onCommandHoldEnd?()
         }

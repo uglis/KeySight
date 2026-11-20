@@ -141,18 +141,20 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.allowsKeyFocus = false
         panel.level = .statusBar
         viewModel.displayMode = .peekOverlay
+        viewModel.overlayPageIndex = 0
         viewModel.isSearchActive = false
         viewModel.searchQuery = ""
         viewModel.isHUDVisible = true
+        viewModel.recomputeViewResult()
         viewModel.scanCurrentTargetApp(silent: false)
 
         let screen = activeScreen()
         let visible = screen.visibleFrame
-        let width = min(960, visible.width - 80)
-        let height = min(600, visible.height - 100)
+        let width = min(1160, visible.width - 56)
+        let height = min(630, visible.height - 84)
         let origin = NSPoint(
             x: visible.midX - width / 2,
-            y: visible.midY - height / 2 + 12
+            y: visible.midY - height / 2 + 10
         )
         panel.setFrame(NSRect(origin: origin, size: NSSize(width: width, height: height)), display: true)
 
@@ -216,7 +218,15 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
     /// Converts an active Hold-⌘ overlay into a Pinned HUD in one click.
     func pinFromOverlay() {
+        viewModel.liveHeldModifiers = []
         showPinnedHUD(focusSearch: false)
+    }
+
+    /// Triggered when user presses Space or '/' while holding ⌘ in Peek Overlay:
+    /// locks the HUD on screen and jumps straight into Search & Execute mode (zero trackpad!).
+    func promoteOverlayToSearch() {
+        viewModel.liveHeldModifiers = []
+        openSearchMode()
     }
 
     /// Opens directly into Search & Execute mode (⌥⇧F).

@@ -23,6 +23,8 @@ struct KeySightCoreTestRunner {
         testSearchMatchesChineseEnglishAndKeyTokens()
         testProgressStorePersistence()
         testAppearanceStyles()
+        testHideBasicShortcutsAndLiveModifierFilter()
+        testOverlayPagination()
 
         print("KeySightCoreTests finished: \(passed) passed, \(failed) failed")
         if failed > 0 {
@@ -127,7 +129,7 @@ struct KeySightCoreTestRunner {
         let result = ShortcutSearchEngine.buildViewResult(
             snapshot: snapshot,
             progress: progress,
-            options: ShortcutFilterOptions(onlyEnabled: true, includeSupplemental: false, hideMastered: true)
+            options: ShortcutFilterOptions(onlyEnabled: true, includeSupplemental: false, hideMastered: true, hideBasicShortcuts: false)
         )
 
         check(result.totalAvailableCount == 2, "filters out disabled menu items")
@@ -203,5 +205,67 @@ struct KeySightCoreTestRunner {
         check(HUDAppearanceStyle.solidGraphite.isLiquidGlass == false, "solidGraphite is solid")
         check(HUDAppearanceStyle.liquidGlassClear.next == .liquidGlass, "cycles to next style")
         check(HUDAppearanceStyle.solidGraphite.next == .liquidGlassClear, "wraps around to liquidGlassClear")
+    }
+
+    static func testHideBasicShortcutsAndLiveModifierFilter() {
+        let copy = ShortcutItem(
+            id: "b::copy", appBundleID: "com.test", title: "拷贝", category: "编辑",
+            keyCombo: KeyCombo(modifiers: [.command], keyDisplay: "C"), source: .liveMenu
+        )
+        let save = ShortcutItem(
+            id: "b::save", appBundleID: "com.test", title: "存储", category: "文件",
+            keyCombo: KeyCombo(modifiers: [.command], keyDisplay: "S"), source: .liveMenu
+        )
+        let cmdShiftT = ShortcutItem(
+            id: "b::reopen", appBundleID: "com.test", title: "恢复标签页", category: "历史",
+            keyCombo: KeyCombo(modifiers: [.command, .shift], keyDisplay: "T"), source: .liveMenu
+        )
+        let cmdOptI = ShortcutItem(
+            id: "b::devtools", appBundleID: "com.test", title: "检查元素", category: "开发",
+            keyCombo: KeyCombo(modifiers: [.command, .option], keyDisplay: "I"), source: .liveMenu
+        )
+
+        let snapshot = AppScanSnapshot(
+            pid: 7, bundleID: "com.test", appName: "Demo",
+            liveMenuShortcuts: [copy, save, cmdShiftT, cmdOptI]
+        )
+
+        // Hide universal basics (⌘C, ⌘S)
+        let hidden = ShortcutSearchEngine.buildViewResult(
+            snapshot: snapshot,
+            progress: ShortcutProgressData(),
+            options: ShortcutFilterOptions(includeSupplemental: false, hideBasicShortcuts: true)
+        )
+        check(hidden.hiddenBasicCount == 2, "counts 2 hidden universal basic shortcuts")
+        check(hidden.flatVisibleItems.count == 2, "keeps non-basic shortcuts visible")
+
+        // Live Which-Key modifier filter: holding ⌘ + ⇧
+        let shiftFiltered = ShortcutSearchEngine.buildViewResult(
+            snapshot: snapshot,
+            progress: ShortcutProgressData(),
+            options: ShortcutFilterOptions(
+                includeSupplemental: false,
+                hideBasicShortcuts: true,
+                requiredModifiers: [.command, .shift]
+            )
+        )
+        check(shiftFiltered.flatVisibleItems.map(\.id) == ["b::reopen"], "live ⌘⇧ filter narrows to exact chord")
+    }
+
+    static func testOverlayPagination() {
+        // 30 items in a single category should split across multiple columns & pages without losing items
+        let items = (1...30).map { i in
+            ShortcutItem(
+                id: "p::\(i)", appBundleID: "com.test", title: "操作 \(i)", category: "编辑",
+                keyCombo: KeyCombo(modifiers: [.command], keyDisplay: "\(i)"), source: .liveMenu
+            )
+        }
+        let groups = [ShortcutGroup(title: "编辑", items: items)]
+        let pages = ShortcutSearchEngine.paginateGroupsForOverlay(groups, columnsPerPage: 2, maxUnitsPerColumn: 10)
+        check(pages.count >= 2, "splits 30 items into multiple zero-scroll pages")
+
+        let allPackedIDs = pages.flatMap { $0.columns.flatMap { $0.groups.flatMap { $0.items.map(\.id) } } }
+        check(allPackedIDs.count == 30, "preserves all 30 items across pages")
+        check(pages[0].columns[1].groups.first?.title == "编辑（续）", "labels continuation columns cleanly")
     }
 }

@@ -89,8 +89,8 @@ struct ShortcutRowView: View {
                 glassStyle: glassStyle
             )
         }
-        .padding(.horizontal, compact ? 8 : 10)
-        .padding(.vertical, compact ? 5 : 6.5)
+        .padding(.horizontal, compact ? 6 : 10)
+        .padding(.vertical, compact ? 3.5 : 6.5)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
                 .fill(backgroundColor)

@@ -5,6 +5,8 @@ public struct ShortcutFilterOptions: Sendable {
     public var onlyEnabled: Bool
     public var includeSupplemental: Bool
     public var hideMastered: Bool
+    public var hideBasicShortcuts: Bool
+    public var requiredModifiers: KeyModifiers?
     public var selectedCategory: String?
 
     public init(
@@ -12,13 +14,39 @@ public struct ShortcutFilterOptions: Sendable {
         onlyEnabled: Bool = true,
         includeSupplemental: Bool = true,
         hideMastered: Bool = true,
+        hideBasicShortcuts: Bool = true,
+        requiredModifiers: KeyModifiers? = nil,
         selectedCategory: String? = nil
     ) {
         self.query = query
         self.onlyEnabled = onlyEnabled
         self.includeSupplemental = includeSupplemental
         self.hideMastered = hideMastered
+        self.hideBasicShortcuts = hideBasicShortcuts
+        self.requiredModifiers = requiredModifiers
         self.selectedCategory = selectedCategory
+    }
+}
+
+public struct OverlayColumn: Identifiable, Sendable {
+    public let id: String
+    public let groups: [ShortcutGroup]
+
+    public init(id: String, groups: [ShortcutGroup]) {
+        self.id = id
+        self.groups = groups
+    }
+}
+
+public struct OverlayPage: Identifiable, Sendable {
+    public let id: Int
+    public let pageIndex: Int
+    public let columns: [OverlayColumn]
+
+    public init(pageIndex: Int, columns: [OverlayColumn]) {
+        self.id = pageIndex
+        self.pageIndex = pageIndex
+        self.columns = columns
     }
 }
 
@@ -29,6 +57,7 @@ public struct ShortcutViewResult: Sendable {
     public let availableCategories: [String]
     public let totalAvailableCount: Int
     public let totalMasteredCount: Int
+    public let hiddenBasicCount: Int
 
     public init(
         groups: [ShortcutGroup],
@@ -36,7 +65,8 @@ public struct ShortcutViewResult: Sendable {
         masteredItems: [ShortcutItem],
         availableCategories: [String],
         totalAvailableCount: Int,
-        totalMasteredCount: Int
+        totalMasteredCount: Int,
+        hiddenBasicCount: Int = 0
     ) {
         self.groups = groups
         self.flatVisibleItems = flatVisibleItems
@@ -44,11 +74,41 @@ public struct ShortcutViewResult: Sendable {
         self.availableCategories = availableCategories
         self.totalAvailableCount = totalAvailableCount
         self.totalMasteredCount = totalMasteredCount
+        self.hiddenBasicCount = hiddenBasicCount
     }
 }
 
 public enum ShortcutSearchEngine {
     public static let pinnedCategoryTitle = "重点练习"
+
+    /// Universal macOS muscle-memory shortcuts that appear in almost every app.
+    /// Users can hide these in one click to cut ~25% visual clutter in the HUD.
+    public static let universalBasicSignatures: Set<String> = {
+        let combos: [(KeyModifiers, String)] = [
+            ([.command], "C"),        // Copy
+            ([.command], "V"),        // Paste
+            ([.command], "X"),        // Cut
+            ([.command], "Z"),        // Undo
+            ([.command, .shift], "Z"),// Redo
+            ([.command], "A"),        // Select All
+            ([.command], "S"),        // Save
+            ([.command], "P"),        // Print
+            ([.command], "Q"),        // Quit
+            ([.command], "W"),        // Close
+            ([.command], "M"),        // Minimize
+            ([.command], "H"),        // Hide
+            ([.command], "N"),        // New
+            ([.command], "O"),        // Open
+            ([.command], "F")         // Find
+        ]
+        return Set(combos.map { KeyCombo(modifiers: $0.0, keyDisplay: $0.1).normalizedSignature })
+    }()
+
+    public static func isBasicShortcut(_ item: ShortcutItem) -> Bool {
+        // Context tips (e.g., ⌃A/⌃E/Space) are anti-trackpad tips, never treated as basic clutter
+        if item.source == .contextTip { return false }
+        return universalBasicSignatures.contains(item.keyCombo.normalizedSignature)
+    }
 
     /// Merges live menu shortcuts with context/app/system supplemental shortcuts, deduplicating by key signature.
     public static func mergeShortcuts(
@@ -105,13 +165,39 @@ public enum ShortcutSearchEngine {
         let totalAvailableCount = enabledFiltered.count
         let totalMasteredCount = masteredAll.count
 
-        // Separate mastered items if hideMastered is enabled (unless user is actively searching!)
         let trimmedQuery = options.query.trimmingCharacters(in: .whitespacesAndNewlines)
-        let activePool: [ShortcutItem]
+
+        // Separate mastered items if hideMastered is enabled (unless actively searching)
+        let afterMastered: [ShortcutItem]
         if options.hideMastered && trimmedQuery.isEmpty {
-            activePool = enabledFiltered.filter { !progress.masteredIDs.contains($0.id) }
+            afterMastered = enabledFiltered.filter { !progress.masteredIDs.contains($0.id) }
         } else {
-            activePool = enabledFiltered
+            afterMastered = enabledFiltered
+        }
+
+        // Optionally hide universal basic shortcuts (unless explicitly pinned or actively searching)
+        var hiddenBasicCount = 0
+        let afterBasics: [ShortcutItem]
+        if options.hideBasicShortcuts && trimmedQuery.isEmpty {
+            var kept: [ShortcutItem] = []
+            for item in afterMastered {
+                if !progress.pinnedIDs.contains(item.id) && isBasicShortcut(item) {
+                    hiddenBasicCount += 1
+                } else {
+                    kept.append(item)
+                }
+            }
+            afterBasics = kept
+        } else {
+            afterBasics = afterMastered
+        }
+
+        // Apply live Which-Key modifier chord filter (when user holds ⌘ + additional ⇧/⌥/⌃)
+        let activePool: [ShortcutItem]
+        if let required = options.requiredModifiers, !required.isEmpty, trimmedQuery.isEmpty {
+            activePool = afterBasics.filter { $0.keyCombo.modifiers.isSuperset(of: required) }
+        } else {
+            activePool = afterBasics
         }
 
         // Compute ordered categories before category-pill filtering
@@ -138,7 +224,7 @@ public enum ShortcutSearchEngine {
                 .map(\.0)
         }
 
-        // Apply category pill filter (only when not searching, or if explicitly selected)
+        // Apply category pill filter (only when not searching)
         let categoryFiltered: [ShortcutItem]
         if let selectedCat = options.selectedCategory, trimmedQuery.isEmpty {
             if selectedCat == pinnedCategoryTitle {
@@ -153,7 +239,6 @@ public enum ShortcutSearchEngine {
         // Group results cleanly
         let groups: [ShortcutGroup]
         if !trimmedQuery.isEmpty {
-            // In active search mode, show a single ranked list so keyboard ↑/↓/Return is razor fast
             groups = categoryFiltered.isEmpty
                 ? []
                 : [ShortcutGroup(title: "搜索结果（\(categoryFiltered.count)）", items: categoryFiltered)]
@@ -174,8 +259,75 @@ public enum ShortcutSearchEngine {
             masteredItems: masteredAll,
             availableCategories: orderedCategories,
             totalAvailableCount: totalAvailableCount,
-            totalMasteredCount: totalMasteredCount
+            totalMasteredCount: totalMasteredCount,
+            hiddenBasicCount: hiddenBasicCount
         )
+    }
+
+    /// Packs shortcut groups into fixed-capacity columns & pages so the Hold-⌘ Overlay
+    /// NEVER needs trackpad scrolling — users can scan 1 full screen or flip pages with ← / →.
+    public static func paginateGroupsForOverlay(
+        _ groups: [ShortcutGroup],
+        columnsPerPage: Int = 3,
+        maxUnitsPerColumn: Int = 18
+    ) -> [OverlayPage] {
+        guard !groups.isEmpty else { return [] }
+        let safeCols = max(1, columnsPerPage)
+        let safeCap = max(6, maxUnitsPerColumn)
+
+        // Header + card padding costs ~2 row units; each shortcut row costs 1 unit
+        let headerCost = 2
+
+        var allColumns: [OverlayColumn] = []
+        var currentColGroups: [ShortcutGroup] = []
+        var usedUnits = 0
+
+        func flushColumn() {
+            guard !currentColGroups.isEmpty else { return }
+            let colID = "col-\(allColumns.count)"
+            allColumns.append(OverlayColumn(id: colID, groups: currentColGroups))
+            currentColGroups = []
+            usedUnits = 0
+        }
+
+        for group in groups {
+            var remaining = group.items
+            var partIndex = 0
+
+            while !remaining.isEmpty {
+                let remainingSpace = safeCap - usedUnits
+                // Need at least header + 2 items to start a group in the current column (unless column is empty)
+                if !currentColGroups.isEmpty && remainingSpace < headerCost + min(2, remaining.count) {
+                    flushColumn()
+                }
+
+                let availableItemSlots = max(1, (safeCap - usedUnits) - headerCost)
+                let sliceCount = min(remaining.count, availableItemSlots)
+                let slice = Array(remaining.prefix(sliceCount))
+                remaining.removeFirst(sliceCount)
+
+                let sliceTitle = partIndex == 0 ? group.title : "\(group.title)（续）"
+                currentColGroups.append(ShortcutGroup(title: sliceTitle, items: slice))
+                usedUnits += headerCost + sliceCount
+                partIndex += 1
+
+                if !remaining.isEmpty {
+                    flushColumn()
+                }
+            }
+        }
+        flushColumn()
+
+        // Chunk columns into pages of `safeCols` columns each
+        var pages: [OverlayPage] = []
+        var idx = 0
+        while idx < allColumns.count {
+            let end = min(idx + safeCols, allColumns.count)
+            let pageCols = Array(allColumns[idx..<end])
+            pages.append(OverlayPage(pageIndex: pages.count, columns: pageCols))
+            idx = end
+        }
+        return pages
     }
 
     private static func computeOrderedCategories(
@@ -224,7 +376,6 @@ public enum ShortcutSearchEngine {
     ) -> [ShortcutGroup] {
         var groups: [ShortcutGroup] = []
 
-        // If user explicitly picked "重点练习"
         if selectedCategory == pinnedCategoryTitle {
             let pinned = items.filter { pinnedIDs.contains($0.id) }
             if !pinned.isEmpty {
@@ -233,7 +384,6 @@ public enum ShortcutSearchEngine {
             return groups
         }
 
-        // Otherwise surface Pinned items at the top when viewing "全部"
         var remaining = items
         if selectedCategory == nil {
             let pinned = items.filter { pinnedIDs.contains($0.id) }
@@ -317,14 +467,12 @@ public enum ShortcutSearchEngine {
                 tokenScore = max(tokenScore, 45)
             }
 
-            // Every token must match something
             if tokenScore == 0 {
                 return 0
             }
             totalScore += tokenScore
         }
 
-        // Small boosts for pinned, enabled, context-relevant, and frequently used shortcuts
         if progress.pinnedIDs.contains(item.id) { totalScore += 25 }
         if item.isEnabled { totalScore += 15 }
         if item.source == .contextTip { totalScore += 12 }

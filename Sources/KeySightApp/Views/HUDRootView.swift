@@ -41,6 +41,11 @@ struct HUDRootView: View {
                     Divider().opacity(0.25)
                 }
 
+                if isOverlay {
+                    overlayControlStrip
+                    Divider().opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.16 : 0.25)
+                }
+
                 if !isOverlay {
                     searchBar
                     if viewModel.searchQuery.isEmpty && !viewModel.viewResult.availableCategories.isEmpty {
@@ -166,16 +171,21 @@ struct HUDRootView: View {
             if isOverlay {
                 HStack(spacing: 6) {
                     MiniToggleChip(label: "仅可用", icon: "checkmark.seal", isOn: $viewModel.onlyEnabled)
-                    MiniToggleChip(label: "免触控板推荐", icon: "sparkles", isOn: $viewModel.includeSupplemental)
-                    MiniToggleChip(label: "隐藏已记住", icon: "eye.slash", isOn: $viewModel.hideMastered)
-                    appearancePickerButton(showLabel: true)
+                    MiniToggleChip(
+                        label: viewModel.viewResult.hiddenBasicCount > 0 ? "隐基础键(\(viewModel.viewResult.hiddenBasicCount))" : "隐基础键",
+                        icon: "line.3.horizontal.decrease.circle",
+                        isOn: $viewModel.hideBasicShortcuts
+                    )
+                    MiniToggleChip(label: "免触控板", icon: "sparkles", isOn: $viewModel.includeSupplemental)
+                    MiniToggleChip(label: "隐已记住", icon: "eye.slash", isOn: $viewModel.hideMastered)
+                    appearancePickerButton(showLabel: false)
 
                     Button {
                         viewModel.onRequestPinFromOverlay?()
                     } label: {
-                        Label("钉住悬浮窗", systemImage: "pin.fill")
+                        Label("钉住", systemImage: "pin.fill")
                             .font(.system(size: 11.5, weight: .semibold))
-                            .padding(.horizontal, 10)
+                            .padding(.horizontal, 9)
                             .padding(.vertical, 5)
                     }
                     .buttonStyle(.borderedProminent)
@@ -422,68 +432,202 @@ struct HUDRootView: View {
         }
     }
 
-    /// Wide multi-column cheat-sheet grid for Hold-⌘ Peek Overlay
-    private var overlayGridContent: some View {
-        ScrollView(.vertical, showsIndicators: true) {
-            let columns = [
-                GridItem(.adaptive(minimum: 270, maximum: 340), spacing: 12, alignment: .top)
-            ]
-            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
-                ForEach(viewModel.viewResult.groups) { group in
-                    VStack(alignment: .leading, spacing: 5) {
-                        HStack(spacing: 6) {
-                            if group.title == ShortcutSearchEngine.pinnedCategoryTitle {
-                                Image(systemName: "star.fill")
-                                    .font(.system(size: 10))
-                                    .foregroundStyle(.orange)
-                            }
-                            Text(group.title)
-                                .font(.system(size: 11.5, weight: .bold))
-                                .foregroundStyle(.secondary)
-                            Spacer()
-                            Text("\(group.items.count)")
-                                .font(.system(size: 10, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.tertiary)
-                        }
-                        .padding(.horizontal, 6)
-                        .padding(.bottom, 2)
+    // MARK: - Hold-⌘ Live Modifier Chord & Zero-Trackpad Strip
 
-                        VStack(spacing: 2) {
-                            ForEach(group.items) { item in
-                                ShortcutRowView(
-                                    item: item,
-                                    isPinned: viewModel.isPinned(item),
-                                    isMastered: viewModel.isMastered(item),
-                                    isSelected: false,
-                                    isHovered: viewModel.hoveredItemID == item.id,
-                                    compact: true,
-                                    glassStyle: viewModel.appearanceStyle.isLiquidGlass,
-                                    onHoverChanged: { hovering in
-                                        if hovering {
-                                            viewModel.hoveredItemID = item.id
-                                        } else if viewModel.hoveredItemID == item.id {
-                                            viewModel.hoveredItemID = nil
-                                        }
-                                    },
-                                    onExecute: { viewModel.executeShortcut(item) },
-                                    onTogglePin: { viewModel.togglePinned(item) },
-                                    onToggleMastered: { viewModel.toggleMastered(item) }
-                                )
-                            }
-                        }
-                    }
-                    .padding(10)
-                    .background(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .fill(Color.primary.opacity(0.045))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 12, style: .continuous)
-                            .strokeBorder(Color.primary.opacity(0.07), lineWidth: 0.75)
-                    )
+    private var overlayControlStrip: some View {
+        HStack(spacing: 10) {
+            HStack(spacing: 5) {
+                Text("叠加筛选")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.secondary)
+
+                modifierBadge(symbol: "⌘", active: true)
+                modifierBadge(symbol: "⇧", active: viewModel.liveHeldModifiers.contains(.shift))
+                modifierBadge(symbol: "⌥", active: viewModel.liveHeldModifiers.contains(.option))
+                modifierBadge(symbol: "⌃", active: viewModel.liveHeldModifiers.contains(.control))
+
+                if let chord = viewModel.activeChordFilter {
+                    Text("仅显示 \(chord.symbols.joined()) 组合（\(viewModel.viewResult.flatVisibleItems.count) 项）")
+                        .font(.system(size: 11, weight: .semibold))
+                        .foregroundStyle(Color.accentColor)
+                        .padding(.leading, 4)
+                } else {
+                    Text("按住 ⇧ / ⌥ / ⌃ 即时缩窄")
+                        .font(.system(size: 11))
+                        .foregroundStyle(.tertiary)
+                        .padding(.leading, 2)
                 }
             }
-            .padding(14)
+
+            Spacer(minLength: 8)
+
+            // Instant jump-to-search hint
+            HStack(spacing: 4) {
+                Text("按")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                miniKeyBadge("Space")
+                Text("或")
+                    .font(.system(size: 11))
+                    .foregroundStyle(.secondary)
+                miniKeyBadge("/")
+                Text("秒进搜索")
+                    .font(.system(size: 11, weight: .medium))
+                    .foregroundStyle(.primary.opacity(0.85))
+            }
+
+            // Keyboard paging indicator when more than 1 page
+            if viewModel.overlayPages.count > 1 {
+                Divider().frame(height: 14).opacity(0.35)
+
+                HStack(spacing: 6) {
+                    Button {
+                        viewModel.stepOverlayPage(delta: -1)
+                    } label: {
+                        Image(systemName: "chevron.left")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 20, height: 20)
+                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
+                    }
+                    .buttonStyle(.plain)
+
+                    Text("第 \(viewModel.overlayPageIndex + 1) / \(viewModel.overlayPages.count) 页")
+                        .font(.system(size: 11, weight: .semibold, design: .rounded))
+                        .monospacedDigit()
+
+                    HStack(spacing: 4) {
+                        ForEach(0..<viewModel.overlayPages.count, id: \.self) { idx in
+                            Circle()
+                                .fill(idx == viewModel.overlayPageIndex ? Color.accentColor : Color.primary.opacity(0.22))
+                                .frame(width: idx == viewModel.overlayPageIndex ? 6.5 : 5, height: idx == viewModel.overlayPageIndex ? 6.5 : 5)
+                                .onTapGesture {
+                                    viewModel.overlayPageIndex = idx
+                                }
+                        }
+                    }
+
+                    Button {
+                        viewModel.stepOverlayPage(delta: 1)
+                    } label: {
+                        Image(systemName: "chevron.right")
+                            .font(.system(size: 10, weight: .bold))
+                            .frame(width: 20, height: 20)
+                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
+                    }
+                    .buttonStyle(.plain)
+
+                    miniKeyBadge("← →")
+                }
+            }
+        }
+        .padding(.horizontal, 14)
+        .padding(.vertical, 7)
+    }
+
+    private func modifierBadge(symbol: String, active: Bool) -> some View {
+        Text(symbol)
+            .font(.system(size: 12, weight: .bold, design: .rounded))
+            .foregroundStyle(active ? Color.white : Color.secondary)
+            .frame(width: 24, height: 21)
+            .background(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .fill(active ? Color.accentColor : Color.primary.opacity(0.08))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 6, style: .continuous)
+                    .strokeBorder(active ? Color.white.opacity(0.35) : Color.primary.opacity(0.12), lineWidth: 0.75)
+            )
+    }
+
+    private func miniKeyBadge(_ label: String) -> some View {
+        Text(label)
+            .font(.system(size: 10, weight: .semibold, design: .rounded))
+            .foregroundStyle(.primary.opacity(0.9))
+            .padding(.horizontal, 5)
+            .padding(.vertical, 2)
+            .background(
+                RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                    .fill(Color.primary.opacity(0.09))
+            )
+            .overlay(
+                RoundedRectangle(cornerRadius: 4.5, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.15), lineWidth: 0.6)
+            )
+    }
+
+    /// Zero-scroll paginated 4-column layout for Hold-⌘ Peek Overlay
+    private var overlayGridContent: some View {
+        Group {
+            if let page = viewModel.currentOverlayPage {
+                HStack(alignment: .top, spacing: 10) {
+                    ForEach(page.columns) { column in
+                        VStack(alignment: .leading, spacing: 8) {
+                            ForEach(column.groups) { group in
+                                VStack(alignment: .leading, spacing: 3) {
+                                    HStack(spacing: 5) {
+                                        if group.title == ShortcutSearchEngine.pinnedCategoryTitle {
+                                            Image(systemName: "star.fill")
+                                                .font(.system(size: 9.5))
+                                                .foregroundStyle(.orange)
+                                        }
+                                        Text(group.title)
+                                            .font(.system(size: 11, weight: .bold))
+                                            .foregroundStyle(.secondary)
+                                            .lineLimit(1)
+                                        Spacer(minLength: 4)
+                                        Text("\(group.items.count)")
+                                            .font(.system(size: 9.5, weight: .semibold, design: .rounded))
+                                            .foregroundStyle(.tertiary)
+                                    }
+                                    .padding(.horizontal, 6)
+                                    .padding(.bottom, 1)
+
+                                    VStack(spacing: 1.5) {
+                                        ForEach(group.items) { item in
+                                            ShortcutRowView(
+                                                item: item,
+                                                isPinned: viewModel.isPinned(item),
+                                                isMastered: viewModel.isMastered(item),
+                                                isSelected: false,
+                                                isHovered: viewModel.hoveredItemID == item.id,
+                                                compact: true,
+                                                glassStyle: viewModel.appearanceStyle.isLiquidGlass,
+                                                onHoverChanged: { hovering in
+                                                    if hovering {
+                                                        viewModel.hoveredItemID = item.id
+                                                    } else if viewModel.hoveredItemID == item.id {
+                                                        viewModel.hoveredItemID = nil
+                                                    }
+                                                },
+                                                onExecute: { viewModel.executeShortcut(item) },
+                                                onTogglePin: { viewModel.togglePinned(item) },
+                                                onToggleMastered: { viewModel.toggleMastered(item) }
+                                            )
+                                        }
+                                    }
+                                }
+                                .padding(.horizontal, 7)
+                                .padding(.vertical, 7)
+                                .background(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .fill(Color.primary.opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.055 : 0.045))
+                                )
+                                .overlay(
+                                    RoundedRectangle(cornerRadius: 12, style: .continuous)
+                                        .strokeBorder(Color.primary.opacity(0.08), lineWidth: 0.75)
+                                )
+                            }
+                            Spacer(minLength: 0)
+                        }
+                        .frame(maxWidth: .infinity, alignment: .top)
+                    }
+                }
+                .padding(.horizontal, 12)
+                .padding(.vertical, 10)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            } else {
+                emptyStateView
+            }
         }
     }
 
@@ -654,7 +798,7 @@ struct HUDRootView: View {
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
             } else if isOverlay {
-                Text("松开 ⌘ 自动收起 · 看到目标键可直接连按触发 · 点右上角可钉住常驻")
+                Text("零触控板：按住 ⇧/⌥/⌃ 缩窄组合 · 按 Space 或 / 秒进搜索 · ← → 翻页 · 看到目标直接补按触发 · 松开 ⌘ 收起")
                     .font(.system(size: 11))
                     .foregroundStyle(.secondary)
                     .lineLimit(1)
