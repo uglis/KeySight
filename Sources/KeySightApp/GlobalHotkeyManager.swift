@@ -47,28 +47,17 @@ final class GlobalHotkeyManager {
     func start() {
         installEventMonitors()
         registerCarbonHotKeys()
-        ensureOverlayEventTapIfTrusted()
     }
 
     func stop() {
         cancelPendingHold(notifyEnd: false)
         if let m = globalFlagsMonitor { NSEvent.removeMonitor(m) }
         if let m = localFlagsMonitor { NSEvent.removeMonitor(m) }
-        if let m = globalInterruptMonitor { NSEvent.removeMonitor(m) }
-        if let m = localInterruptMonitor { NSEvent.removeMonitor(m) }
+        setInterruptMonitorsEnabled(false)
         globalFlagsMonitor = nil
         localFlagsMonitor = nil
-        globalInterruptMonitor = nil
-        localInterruptMonitor = nil
 
-        if let tap = overlayEventTap {
-            CGEvent.tapEnable(tap: tap, enable: false)
-        }
-        if let src = overlayTapSource {
-            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
-        }
-        overlayEventTap = nil
-        overlayTapSource = nil
+        destroyOverlayEventTap()
 
         if let ref = togglePinHotKeyRef { UnregisterEventHotKey(ref) }
         if let ref = searchHotKeyRef { UnregisterEventHotKey(ref) }
@@ -78,8 +67,11 @@ final class GlobalHotkeyManager {
         hotKeyHandlerRef = nil
     }
 
-    /// Call once Accessibility permission is granted so the active-only event tap becomes available immediately.
-    func ensureOverlayEventTapIfTrusted() {
+    /// No-op hook kept for caller compatibility; tap is created on-demand only while Hold-⌘ Overlay is open.
+    func ensureOverlayEventTapIfTrusted() {}
+
+    /// Creates and activates the CGEventTap ONLY for the brief duration while Hold-⌘ Overlay is visible.
+    private func createAndEnableOverlayEventTap() {
         guard overlayEventTap == nil, AccessibilityScanner.isAccessibilityTrusted(prompt: false) else { return }
 
         let mask = CGEventMask(1 << CGEventType.keyDown.rawValue)
@@ -104,26 +96,44 @@ final class GlobalHotkeyManager {
 
         let source = CFMachPortCreateRunLoopSource(kCFAllocatorDefault, tap, 0)
         CFRunLoopAddSource(CFRunLoopGetMain(), source, .commonModes)
-        CGEvent.tapEnable(tap: tap, enable: false)
+        CGEvent.tapEnable(tap: tap, enable: true)
 
         self.overlayEventTap = tap
         self.overlayTapSource = source
     }
 
-    private func setOverlayTapEnabled(_ enabled: Bool) {
-        if enabled {
-            ensureOverlayEventTapIfTrusted()
+    /// Completely tears down the CGEventTap and Mach port when Hold-⌘ Overlay closes (0 SkyLight IPC while idle!).
+    private func destroyOverlayEventTap() {
+        if let src = overlayTapSource {
+            CFRunLoopRemoveSource(CFRunLoopGetMain(), src, .commonModes)
+            overlayTapSource = nil
         }
         if let tap = overlayEventTap {
-            CGEvent.tapEnable(tap: tap, enable: enabled)
+            CGEvent.tapEnable(tap: tap, enable: false)
+            CFMachPortInvalidate(tap)
+            overlayEventTap = nil
+        }
+    }
+
+    private func setOverlayTapEnabled(_ enabled: Bool) {
+        if enabled {
+            createAndEnableOverlayEventTap()
+        } else {
+            destroyOverlayEventTap()
         }
     }
 
     private func handleOverlayTapEvent(type: CGEventType, event: CGEvent) -> Unmanaged<CGEvent>? {
-        if type == .tapDisabledByTimeout || type == .tapDisabledByUserInput {
-            if let tap = overlayEventTap {
-                CGEvent.tapEnable(tap: tap, enable: isHoldActive)
+        // IMPORTANT: NEVER call CGEvent.tapEnable(..., enable: false) in response to .tapDisabledByUserInput —
+        // doing so triggers another .tapDisabledByUserInput from SkyLight in an infinite high-CPU IPC loop!
+        if type == .tapDisabledByTimeout {
+            if isHoldActive, let tap = overlayEventTap {
+                CGEvent.tapEnable(tap: tap, enable: true)
             }
+            return Unmanaged.passUnretained(event)
+        }
+
+        if type == .tapDisabledByUserInput {
             return Unmanaged.passUnretained(event)
         }
 
