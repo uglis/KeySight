@@ -30,7 +30,6 @@ final class KeySightViewModel: ObservableObject {
         }
     }
     @Published var selectedIndex: Int = 0
-    @Published var hoveredItemID: String? = nil
     @Published var showMasteredDrawer: Bool = false
     @Published var toastMessage: String?
 
@@ -97,9 +96,25 @@ final class KeySightViewModel: ObservableObject {
     @Published var appearanceStyle: HUDAppearanceStyle {
         didSet {
             UserDefaults.standard.set(appearanceStyle.rawValue, forKey: Keys.appearanceStyle)
-            onAppearanceChanged?(appearanceStyle)
+            onAppearanceChanged?(effectiveAppearanceStyle)
             onPreferenceChanged?()
         }
+    }
+    /// Eco mode: keeps Hold-⌘ Peek Overlay in full Apple Liquid Glass,
+    /// while using ultra-low-GPU rendering for always-on Pinned HUD to keep MacBook Air cool.
+    @Published var ecoPinnedMode: Bool {
+        didSet {
+            UserDefaults.standard.set(ecoPinnedMode, forKey: Keys.ecoPinnedMode)
+            onAppearanceChanged?(effectiveAppearanceStyle)
+            onPreferenceChanged?()
+        }
+    }
+
+    var effectiveAppearanceStyle: HUDAppearanceStyle {
+        if displayMode == .pinnedHUD && ecoPinnedMode && appearanceStyle.isLiquidGlass {
+            return .frostedHUD
+        }
+        return appearanceStyle
     }
 
     var onPreferenceChanged: (() -> Void)?
@@ -117,9 +132,10 @@ final class KeySightViewModel: ObservableObject {
 
     private var targetApp: NSRunningApplication?
     private var currentSnapshot: AppScanSnapshot?
+    private var snapshotCache: [pid_t: AppScanSnapshot] = [:]
+    private let cacheTTL: TimeInterval = 20.0
     private var scanGeneration: Int = 0
     private var workspaceObserver: NSObjectProtocol?
-    private var liveRefreshTimer: Timer?
     private var permissionTimer: Timer?
     private var toastWorkItem: DispatchWorkItem?
 
@@ -131,6 +147,7 @@ final class KeySightViewModel: ObservableObject {
         static let commandHoldEnabled = "ks.commandHoldEnabled"
         static let commandHoldDelay = "ks.commandHoldDelay"
         static let appearanceStyle = "ks.appearanceStyle"
+        static let ecoPinnedMode = "ks.ecoPinnedMode"
     }
 
     init() {
@@ -140,6 +157,7 @@ final class KeySightViewModel: ObservableObject {
         self.hideMastered = ud.object(forKey: Keys.hideMastered) as? Bool ?? true
         self.hideBasicShortcuts = ud.object(forKey: Keys.hideBasicShortcuts) as? Bool ?? true
         self.isCommandHoldEnabled = ud.object(forKey: Keys.commandHoldEnabled) as? Bool ?? true
+        self.ecoPinnedMode = ud.object(forKey: Keys.ecoPinnedMode) as? Bool ?? true
         let savedDelay = ud.double(forKey: Keys.commandHoldDelay)
         self.commandHoldDelay = savedDelay > 0.1 ? savedDelay : 0.45
         if let savedStyleRaw = ud.string(forKey: Keys.appearanceStyle),
@@ -169,15 +187,8 @@ final class KeySightViewModel: ObservableObject {
             }
         }
 
-        // Gentle live refresh when pinned HUD is visible (catches tab/focus/menu-enabled updates)
-        liveRefreshTimer = Timer.scheduledTimer(withTimeInterval: 1.8, repeats: true) { [weak self] _ in
-            Task { @MainActor in
-                guard let self, self.isHUDVisible, !self.isSearchActive, self.isAccessibilityGranted else { return }
-                self.scanCurrentTargetApp(silent: true)
-            }
-        }
-
-        // Poll accessibility permission until granted so onboarding resolves automatically
+        // Zero background polling timer! Scans are strictly event-driven (on app switch while HUD is visible,
+        // or on-demand when Hold-⌘ / Search / Refresh is triggered).
         if !isAccessibilityGranted {
             startPermissionPolling()
         }
@@ -187,16 +198,23 @@ final class KeySightViewModel: ObservableObject {
         if let obs = workspaceObserver {
             NSWorkspace.shared.notificationCenter.removeObserver(obs)
         }
-        liveRefreshTimer?.invalidate()
         permissionTimer?.invalidate()
     }
 
     private func startPermissionPolling() {
         permissionTimer?.invalidate()
-        permissionTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] timer in
+        var ticks = 0
+        permissionTimer = Timer.scheduledTimer(withTimeInterval: 2.0, repeats: true) { [weak self] timer in
             Task { @MainActor in
                 guard let self else {
                     timer.invalidate()
+                    return
+                }
+                ticks += 1
+                // Stop background polling after 60s if user hasn't granted yet; re-checks on HUD/menu open
+                if ticks > 30 && !self.isHUDVisible {
+                    timer.invalidate()
+                    self.permissionTimer = nil
                     return
                 }
                 let granted = AccessibilityScanner.isAccessibilityTrusted(prompt: false)
@@ -206,7 +224,7 @@ final class KeySightViewModel: ObservableObject {
                     self.permissionTimer = nil
                     self.onAccessibilityGranted?()
                     self.captureFrontmostAppIfExternal()
-                    self.scanCurrentTargetApp(silent: false)
+                    self.scanCurrentTargetApp(silent: false, forceRefresh: true)
                     self.showToast("辅助功能已授权，已开始实时抓取当前界面快捷键")
                 }
             }
@@ -281,10 +299,12 @@ final class KeySightViewModel: ObservableObject {
             selectedIndex = 0
         }
 
-        scanCurrentTargetApp(silent: !appChanged)
+        // Ultra-low energy: when HUD is hidden, do NOT perform AX scans on background app switches!
+        guard isHUDVisible else { return }
+        scanCurrentTargetApp(silent: !appChanged, forceRefresh: false)
     }
 
-    func scanCurrentTargetApp(silent: Bool = false) {
+    func scanCurrentTargetApp(silent: Bool = false, forceRefresh: Bool = false) {
         if targetApp == nil {
             captureFrontmostAppIfExternal()
         }
@@ -293,6 +313,18 @@ final class KeySightViewModel: ObservableObject {
         let pid = app.processIdentifier
         let bundleID = app.bundleIdentifier ?? ""
         let appName = app.localizedName ?? "当前应用"
+
+        // Serve fresh per-app cache instantaneously (0ms, 0 AX IPCs!) unless forceRefresh requested
+        if !forceRefresh,
+           let cached = snapshotCache[pid],
+           Date().timeIntervalSince(cached.scannedAt) < cacheTTL {
+            self.isScanning = false
+            self.currentSnapshot = cached
+            self.windowTitle = cached.windowTitle
+            self.focusContext = cached.focusContext
+            self.recomputeViewResult()
+            return
+        }
 
         scanGeneration += 1
         let generation = scanGeneration
@@ -306,6 +338,12 @@ final class KeySightViewModel: ObservableObject {
             Task { @MainActor in
                 guard let self, self.scanGeneration == generation else { return }
                 self.isScanning = false
+                self.snapshotCache[pid] = snapshot
+                // Keep cache bounded to 16 recent apps
+                if self.snapshotCache.count > 16,
+                   let oldestKey = self.snapshotCache.min(by: { $0.value.scannedAt < $1.value.scannedAt })?.key {
+                    self.snapshotCache.removeValue(forKey: oldestKey)
+                }
                 self.currentSnapshot = snapshot
                 self.windowTitle = snapshot.windowTitle
                 self.focusContext = snapshot.focusContext

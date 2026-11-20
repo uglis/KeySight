@@ -165,45 +165,61 @@ final class GlobalHotkeyManager {
         return Unmanaged.passUnretained(event)
     }
 
-    // MARK: - Hold Command Detection & Live Modifier Chord Filtering
+    // MARK: - Hold Command Detection & Live Modifier Chord Filtering (Zero Idle Wakeups)
 
     private func installEventMonitors() {
+        // NSEvent global/local monitors always deliver on the main thread;
+        // avoid allocating a Swift Task on every modifier keypress.
         globalFlagsMonitor = NSEvent.addGlobalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.handleFlagsChanged(event.modifierFlags)
             }
         }
         localFlagsMonitor = NSEvent.addLocalMonitorForEvents(matching: .flagsChanged) { [weak self] event in
-            Task { @MainActor in
+            MainActor.assumeIsolated {
                 self?.handleFlagsChanged(event.modifierFlags)
             }
             return event
         }
+    }
 
-        let interruptMask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
-        globalInterruptMonitor = NSEvent.addGlobalMonitorForEvents(matching: interruptMask) { [weak self] event in
-            Task { @MainActor in
-                // If our active-only event tap is running, keyDown is handled cleanly there;
-                // mouse clicks still dismiss immediately.
-                if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
-                    return
-                }
-                self?.handleInterruptEvent()
-            }
-        }
-        localInterruptMonitor = NSEvent.addLocalMonitorForEvents(matching: interruptMask) { [weak self] event in
-            Task { @MainActor in
-                if event.type == .leftMouseDown || event.type == .rightMouseDown {
-                    if event.window != nil {
+    /// Dynamically installs key/mouse interrupt monitors ONLY while waiting for a ⌘ hold
+    /// or while the Hold-⌘ Overlay is actively visible — 0 wakeups during normal typing/clicking!
+    private func setInterruptMonitorsEnabled(_ enabled: Bool) {
+        if enabled {
+            guard globalInterruptMonitor == nil else { return }
+            let interruptMask: NSEvent.EventTypeMask = [.keyDown, .leftMouseDown, .rightMouseDown, .otherMouseDown]
+            globalInterruptMonitor = NSEvent.addGlobalMonitorForEvents(matching: interruptMask) { [weak self] event in
+                MainActor.assumeIsolated {
+                    if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
                         return
                     }
+                    self?.handleInterruptEvent()
                 }
-                if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
-                    return
-                }
-                self?.handleInterruptEvent()
             }
-            return event
+            localInterruptMonitor = NSEvent.addLocalMonitorForEvents(matching: interruptMask) { [weak self] event in
+                MainActor.assumeIsolated {
+                    if event.type == .leftMouseDown || event.type == .rightMouseDown {
+                        if event.window != nil {
+                            return
+                        }
+                    }
+                    if event.type == .keyDown && self?.overlayEventTap != nil && self?.isHoldActive == true {
+                        return
+                    }
+                    self?.handleInterruptEvent()
+                }
+                return event
+            }
+        } else {
+            if let m = globalInterruptMonitor {
+                NSEvent.removeMonitor(m)
+                globalInterruptMonitor = nil
+            }
+            if let m = localInterruptMonitor {
+                NSEvent.removeMonitor(m)
+                localInterruptMonitor = nil
+            }
         }
     }
 
@@ -213,20 +229,27 @@ final class GlobalHotkeyManager {
         let relevant: NSEvent.ModifierFlags = [.command, .option, .control, .shift]
         let active = rawFlags.intersection(relevant)
 
+        // Ultra-fast early exit when ⌘ isn't held and no hold timer/overlay is active (0 allocations!)
+        if !active.contains(.command) && holdWorkItem == nil && !isHoldActive {
+            return
+        }
+
         if active == .command {
             if isHoldActive {
-                // User released ⇧/⌥/⌃ while still holding ⌘ -> reset live chord filter back to all
                 onHeldModifiersChanged?([.command])
                 return
             }
 
             guard holdWorkItem == nil else { return }
 
+            setInterruptMonitorsEnabled(true)
+
             let work = DispatchWorkItem { [weak self] in
                 guard let self else { return }
                 let liveFlags = NSEvent.modifierFlags.intersection([.command, .option, .control, .shift])
                 guard liveFlags == .command else {
                     self.holdWorkItem = nil
+                    self.setInterruptMonitorsEnabled(false)
                     return
                 }
                 self.isHoldActive = true
@@ -238,15 +261,11 @@ final class GlobalHotkeyManager {
             holdWorkItem = work
             DispatchQueue.main.asyncAfter(deadline: .now() + commandHoldDelay, execute: work)
         } else if !active.contains(.command) {
-            // Command released
             cancelPendingHold(notifyEnd: isHoldActive)
         } else {
-            // Another modifier was added alongside Command (e.g. ⌘⇧ / ⌘⌥ / ⌘⌃)
             if isHoldActive {
-                // Live Which-Key modifier filtering!
                 onHeldModifiersChanged?(Self.convertModifiers(active))
             } else {
-                // User is executing a quick multi-modifier shortcut before the hold delay elapsed -> cancel
                 cancelPendingHold(notifyEnd: false)
             }
         }
@@ -270,6 +289,7 @@ final class GlobalHotkeyManager {
         holdWorkItem = nil
         isHoldActive = false
         setOverlayTapEnabled(false)
+        setInterruptMonitorsEnabled(false)
         onHeldModifiersChanged?([])
     }
 
@@ -279,6 +299,7 @@ final class GlobalHotkeyManager {
         let wasActive = isHoldActive
         isHoldActive = false
         setOverlayTapEnabled(false)
+        setInterruptMonitorsEnabled(false)
         onHeldModifiersChanged?([])
         if notifyEnd && wasActive {
             onCommandHoldEnd?()

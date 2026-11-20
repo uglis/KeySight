@@ -52,7 +52,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.collectionBehavior = [.canJoinAllSpaces, .fullScreenAuxiliary, .ignoresCycle]
         panel.level = .floating
 
-        applyAppearanceStyle(viewModel.appearanceStyle)
+        applyAppearanceStyle(viewModel.effectiveAppearanceStyle)
         installKeyboardNavigationMonitor()
     }
 
@@ -65,10 +65,9 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             } else {
                 let container = NSGlassEffectContainerView(frame: panel.contentLayoutRect)
                 container.autoresizingMask = [.width, .height]
-                container.spacing = 12
+                container.spacing = 0
 
-                // Slight breathing inset inside the transparent borderless panel prevents
-                // WindowServer from clipping the curved outer optical lensing & specular rim.
+                // Slight breathing inset prevents clipping the curved outer optical lensing & specular rim.
                 let insetRect = container.bounds.insetBy(dx: 6, dy: 6)
                 glassView = NSGlassEffectView(frame: insetRect)
                 glassView.autoresizingMask = [.width, .height]
@@ -84,12 +83,10 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
 
             switch style {
             case .liquidGlassClear:
-                // Authentic macOS Dock Liquid Glass: pure .clear optical lensing, no milky tint, lush 26pt squircle
                 glassView.style = .clear
                 glassView.tintColor = nil
                 glassView.cornerRadius = 26
             case .liquidGlass:
-                // Standard macOS 26/27 Liquid Glass: adaptive frosted refraction with higher contrast over dense text
                 glassView.style = .regular
                 glassView.tintColor = nil
                 glassView.cornerRadius = 24
@@ -97,25 +94,31 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
                 break
             }
 
+            // Keep static optical lensing (disable continuous cursor-ripple Metal tracking)
+            // to prevent GPU/WindowServer heat on fanless MacBooks while preserving full Dock refraction.
             if #available(macOS 27.0, *) {
-                glassView.effectIsInteractive = true
+                glassView.effectIsInteractive = false
             }
             panel.invalidateShadow()
         } else {
-            if panel.contentView !== hostingView {
-                if #available(macOS 26.0, *),
-                   let container = panel.contentView as? NSGlassEffectContainerView {
-                    if let existingGlass = container.contentView as? NSGlassEffectView {
-                        existingGlass.contentView = nil
-                    }
-                    container.contentView = nil
-                }
-                hostingView.removeFromSuperview()
-                hostingView.frame = panel.contentLayoutRect
-                hostingView.autoresizingMask = [.width, .height]
-                panel.contentView = hostingView
-            }
+            detachGlassBackdropIfNeeded()
             panel.invalidateShadow()
+        }
+    }
+
+    private func detachGlassBackdropIfNeeded() {
+        if panel.contentView !== hostingView {
+            if #available(macOS 26.0, *),
+               let container = panel.contentView as? NSGlassEffectContainerView {
+                if let existingGlass = container.contentView as? NSGlassEffectView {
+                    existingGlass.contentView = nil
+                }
+                container.contentView = nil
+            }
+            hostingView.removeFromSuperview()
+            hostingView.frame = panel.contentLayoutRect
+            hostingView.autoresizingMask = [.width, .height]
+            panel.contentView = hostingView
         }
     }
 
@@ -141,12 +144,13 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         panel.allowsKeyFocus = false
         panel.level = .statusBar
         viewModel.displayMode = .peekOverlay
+        applyAppearanceStyle(viewModel.effectiveAppearanceStyle)
         viewModel.overlayPageIndex = 0
         viewModel.isSearchActive = false
         viewModel.searchQuery = ""
         viewModel.isHUDVisible = true
         viewModel.recomputeViewResult()
-        viewModel.scanCurrentTargetApp(silent: false)
+        viewModel.scanCurrentTargetApp(silent: false, forceRefresh: true)
 
         let screen = activeScreen()
         let visible = screen.visibleFrame
@@ -181,6 +185,8 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
                 guard let self, !self.isOverlayOpen, !self.isPinnedOpen else { return }
                 self.panel.orderOut(nil)
                 self.panel.alphaValue = 1.0
+                // Release Liquid Glass backdrop surface while hidden -> 0% WindowServer GPU overhead
+                self.detachGlassBackdropIfNeeded()
             }
         })
     }
@@ -192,8 +198,9 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         openedViaSearchOnly = false
         panel.level = .floating
         viewModel.displayMode = .pinnedHUD
+        applyAppearanceStyle(viewModel.effectiveAppearanceStyle)
         viewModel.isHUDVisible = true
-        viewModel.scanCurrentTargetApp(silent: false)
+        viewModel.scanCurrentTargetApp(silent: false, forceRefresh: false)
 
         let targetFrame = savedPinnedFrame() ?? defaultPinnedFrame()
         panel.setFrame(targetFrame, display: true)
@@ -236,8 +243,9 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
             isOverlayOpen = false
             panel.level = .floating
             viewModel.displayMode = .pinnedHUD
+            applyAppearanceStyle(viewModel.effectiveAppearanceStyle)
             viewModel.isHUDVisible = true
-            viewModel.scanCurrentTargetApp(silent: false)
+            viewModel.scanCurrentTargetApp(silent: false, forceRefresh: false)
 
             // Center-upper Spotlight-like search card if not already pinned
             let screen = activeScreen()
@@ -291,6 +299,7 @@ final class FloatingPanelController: NSObject, NSWindowDelegate {
         viewModel.searchQuery = ""
         viewModel.isHUDVisible = false
         panel.orderOut(nil)
+        detachGlassBackdropIfNeeded()
     }
 
     var isVisible: Bool {

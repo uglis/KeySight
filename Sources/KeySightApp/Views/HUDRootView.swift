@@ -10,8 +10,12 @@ struct HUDRootView: View {
         viewModel.displayMode == .peekOverlay
     }
 
+    private var activeStyle: HUDAppearanceStyle {
+        viewModel.effectiveAppearanceStyle
+    }
+
     private var cornerRadius: CGFloat {
-        switch viewModel.appearanceStyle {
+        switch activeStyle {
         case .liquidGlassClear: return 26
         case .liquidGlass: return 24
         case .frostedHUD, .solidGraphite: return 16
@@ -20,7 +24,7 @@ struct HUDRootView: View {
 
     private var usesNativeLiquidGlass: Bool {
         if #available(macOS 26.0, *) {
-            return viewModel.appearanceStyle.isLiquidGlass
+            return activeStyle.isLiquidGlass
         }
         return false
     }
@@ -28,13 +32,13 @@ struct HUDRootView: View {
     var body: some View {
         ZStack(alignment: .bottom) {
             HUDSurfaceBackground(
-                style: viewModel.appearanceStyle,
+                style: activeStyle,
                 cornerRadius: cornerRadius
             )
 
             VStack(spacing: 0) {
                 headerBar
-                Divider().opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.22 : 0.35)
+                Divider().opacity(activeStyle.isLiquidGlass ? 0.22 : 0.35)
 
                 if !viewModel.isAccessibilityGranted {
                     permissionBanner
@@ -43,7 +47,7 @@ struct HUDRootView: View {
 
                 if isOverlay {
                     overlayControlStrip
-                    Divider().opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.16 : 0.25)
+                    Divider().opacity(activeStyle.isLiquidGlass ? 0.16 : 0.25)
                 }
 
                 if !isOverlay {
@@ -56,7 +60,7 @@ struct HUDRootView: View {
 
                 contentArea
 
-                Divider().opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.20 : 0.30)
+                Divider().opacity(activeStyle.isLiquidGlass ? 0.20 : 0.30)
                 footerBar
             }
 
@@ -82,7 +86,7 @@ struct HUDRootView: View {
                     RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                         .strokeBorder(
                             LinearGradient(
-                                colors: viewModel.appearanceStyle.isLiquidGlass
+                                colors: activeStyle.isLiquidGlass
                                     ? [Color.white.opacity(0.45), Color.white.opacity(0.14)]
                                     : [Color.primary.opacity(0.18), Color.primary.opacity(0.12)],
                                 startPoint: .topLeading,
@@ -93,7 +97,7 @@ struct HUDRootView: View {
                 }
             }
         )
-        .preferredColorScheme(viewModel.appearanceStyle == .solidGraphite ? .dark : nil)
+        .preferredColorScheme(activeStyle == .solidGraphite ? .dark : nil)
         .animation(.easeOut(duration: 0.16), value: viewModel.toastMessage)
         .onAppear {
             viewModel.onRequestFocusSearch = {
@@ -199,13 +203,13 @@ struct HUDRootView: View {
                     appearancePickerButton(showLabel: false)
 
                     Button {
-                        viewModel.scanCurrentTargetApp(silent: false)
+                        viewModel.scanCurrentTargetApp(silent: false, forceRefresh: true)
                     } label: {
                         Image(systemName: "arrow.clockwise")
                             .font(.system(size: 11.5, weight: .semibold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
-                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
+                            .adaptiveGlassCircle(enabled: activeStyle.isLiquidGlass)
                     }
                     .buttonStyle(.plain)
                     .help("立即刷新当前界面快捷键")
@@ -217,7 +221,7 @@ struct HUDRootView: View {
                             .font(.system(size: 11, weight: .bold))
                             .foregroundStyle(.secondary)
                             .frame(width: 24, height: 24)
-                            .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
+                            .adaptiveGlassCircle(enabled: activeStyle.isLiquidGlass)
                     }
                     .buttonStyle(.plain)
                     .help("隐藏悬浮窗 (⌥⇧K)")
@@ -243,12 +247,26 @@ struct HUDRootView: View {
                     }
                 }
             }
+
+            Divider()
+
+            Button {
+                viewModel.ecoPinnedMode.toggle()
+                viewModel.showToast(viewModel.ecoPinnedMode ? "已开启常驻省电模式（仅长按 ⌘ 时启用液态玻璃）" : "已关闭常驻省电模式")
+            } label: {
+                HStack {
+                    Label("常驻省电模式（推荐）", systemImage: "leaf.fill")
+                    if viewModel.ecoPinnedMode {
+                        Image(systemName: "checkmark")
+                    }
+                }
+            }
         } label: {
             if showLabel {
                 HStack(spacing: 4) {
-                    Image(systemName: viewModel.appearanceStyle.systemSymbol)
+                    Image(systemName: activeStyle.systemSymbol)
                         .font(.system(size: 10, weight: .semibold))
-                    Text(viewModel.appearanceStyle.displayName)
+                    Text(activeStyle.displayName)
                         .font(.system(size: 11, weight: .medium))
                 }
                 .foregroundStyle(.primary.opacity(0.86))
@@ -263,17 +281,17 @@ struct HUDRootView: View {
                         .strokeBorder(Color.primary.opacity(0.12), lineWidth: 0.75)
                 )
             } else {
-                Image(systemName: viewModel.appearanceStyle.systemSymbol)
+                Image(systemName: activeStyle.systemSymbol)
                     .font(.system(size: 11.5, weight: .semibold))
-                    .foregroundStyle(viewModel.appearanceStyle.isLiquidGlass ? Color.accentColor : Color.secondary)
+                    .foregroundStyle(activeStyle.isLiquidGlass ? Color.accentColor : Color.secondary)
                     .frame(width: 24, height: 24)
-                    .adaptiveGlassCircle(enabled: viewModel.appearanceStyle.isLiquidGlass)
+                    .adaptiveGlassCircle(enabled: activeStyle.isLiquidGlass)
             }
         }
         .menuStyle(.borderlessButton)
         .menuIndicator(.hidden)
         .fixedSize()
-        .help("切换悬浮窗外观材质（当前：\(viewModel.appearanceStyle.displayName)）")
+        .help("切换悬浮窗外观材质与省电模式（当前：\(activeStyle.displayName)）")
     }
 
     // MARK: - Permission Banner
@@ -356,13 +374,13 @@ struct HUDRootView: View {
         .padding(.horizontal, 12)
         .padding(.vertical, 7)
         .adaptiveGlassCapsule(
-            enabled: viewModel.appearanceStyle.isLiquidGlass,
+            enabled: activeStyle.isLiquidGlass,
             interactive: true,
             tint: viewModel.isSearchActive ? Color.accentColor.opacity(0.18) : nil
         )
-        .padding(.horizontal, viewModel.appearanceStyle.isLiquidGlass ? 10 : 0)
-        .padding(.top, viewModel.appearanceStyle.isLiquidGlass ? 8 : 0)
-        .padding(.bottom, viewModel.appearanceStyle.isLiquidGlass ? 4 : 0)
+        .padding(.horizontal, activeStyle.isLiquidGlass ? 10 : 0)
+        .padding(.top, activeStyle.isLiquidGlass ? 8 : 0)
+        .padding(.bottom, activeStyle.isLiquidGlass ? 4 : 0)
     }
 
     // MARK: - Category Filter Pills
@@ -396,13 +414,13 @@ struct HUDRootView: View {
                 .padding(.horizontal, 10)
                 .padding(.vertical, 4.5)
                 .adaptiveGlassCapsule(
-                    enabled: viewModel.appearanceStyle.isLiquidGlass,
+                    enabled: activeStyle.isLiquidGlass,
                     interactive: true,
                     tint: isSelected ? Color.accentColor : nil
                 )
                 .background(
                     Group {
-                        if !viewModel.appearanceStyle.isLiquidGlass && isSelected {
+                        if !activeStyle.isLiquidGlass && isSelected {
                             Capsule(style: .continuous).fill(Color.accentColor)
                         }
                     }
@@ -589,16 +607,8 @@ struct HUDRootView: View {
                                                 isPinned: viewModel.isPinned(item),
                                                 isMastered: viewModel.isMastered(item),
                                                 isSelected: false,
-                                                isHovered: viewModel.hoveredItemID == item.id,
                                                 compact: true,
-                                                glassStyle: viewModel.appearanceStyle.isLiquidGlass,
-                                                onHoverChanged: { hovering in
-                                                    if hovering {
-                                                        viewModel.hoveredItemID = item.id
-                                                    } else if viewModel.hoveredItemID == item.id {
-                                                        viewModel.hoveredItemID = nil
-                                                    }
-                                                },
+                                                glassStyle: activeStyle.isLiquidGlass,
                                                 onExecute: { viewModel.executeShortcut(item) },
                                                 onTogglePin: { viewModel.togglePinned(item) },
                                                 onToggleMastered: { viewModel.toggleMastered(item) }
@@ -610,7 +620,7 @@ struct HUDRootView: View {
                                 .padding(.vertical, 7)
                                 .background(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
-                                        .fill(Color.primary.opacity(viewModel.appearanceStyle.isLiquidGlass ? 0.055 : 0.045))
+                                        .fill(Color.primary.opacity(activeStyle.isLiquidGlass ? 0.055 : 0.045))
                                 )
                                 .overlay(
                                     RoundedRectangle(cornerRadius: 12, style: .continuous)
@@ -666,16 +676,8 @@ struct HUDRootView: View {
                                     isPinned: viewModel.isPinned(item),
                                     isMastered: viewModel.isMastered(item),
                                     isSelected: selectedItemID == item.id,
-                                    isHovered: viewModel.hoveredItemID == item.id,
                                     compact: false,
-                                    glassStyle: viewModel.appearanceStyle.isLiquidGlass,
-                                    onHoverChanged: { hovering in
-                                        if hovering {
-                                            viewModel.hoveredItemID = item.id
-                                        } else if viewModel.hoveredItemID == item.id {
-                                            viewModel.hoveredItemID = nil
-                                        }
-                                    },
+                                    glassStyle: activeStyle.isLiquidGlass,
                                     onExecute: { viewModel.executeShortcut(item) },
                                     onTogglePin: { viewModel.togglePinned(item) },
                                     onToggleMastered: { viewModel.toggleMastered(item) }
@@ -746,16 +748,8 @@ struct HUDRootView: View {
                                 isPinned: viewModel.isPinned(item),
                                 isMastered: true,
                                 isSelected: false,
-                                isHovered: viewModel.hoveredItemID == item.id,
                                 compact: false,
-                                glassStyle: viewModel.appearanceStyle.isLiquidGlass,
-                                onHoverChanged: { hovering in
-                                    if hovering {
-                                        viewModel.hoveredItemID = item.id
-                                    } else if viewModel.hoveredItemID == item.id {
-                                        viewModel.hoveredItemID = nil
-                                    }
-                                },
+                                glassStyle: activeStyle.isLiquidGlass,
                                 onExecute: { viewModel.executeShortcut(item) },
                                 onTogglePin: { viewModel.togglePinned(item) },
                                 onToggleMastered: { viewModel.toggleMastered(item) }

@@ -164,19 +164,27 @@ struct MiniToggleChip: View {
 }
 
 extension View {
-    /// Applies native macOS 26+ Liquid Glass capsule/rounded-rect styling to floating interior controls.
+    /// Crisp glass-harmonized interior pill without nesting extra Metal `.glassEffect` backdrop passes
+    /// inside an already-refracting `NSGlassEffectView` (cuts WindowServer GPU load dramatically).
     @ViewBuilder
     func adaptiveGlassCapsule(enabled: Bool, interactive: Bool = true, tint: Color? = nil) -> some View {
         if enabled {
-            if #available(macOS 26.0, *) {
-                let base: Glass = interactive ? .clear.interactive() : .clear
-                let styled: Glass = (tint != nil) ? base.tint(tint) : base
-                self.glassEffect(styled, in: .capsule)
-            } else {
-                self
-                    .background(Capsule(style: .continuous).fill(tint?.opacity(0.18) ?? Color.primary.opacity(0.08)))
-                    .overlay(Capsule(style: .continuous).strokeBorder(Color.white.opacity(0.24), lineWidth: 0.75))
-            }
+            self
+                .background(
+                    Capsule(style: .continuous)
+                        .fill(tint?.opacity(0.82) ?? Color.primary.opacity(0.085))
+                )
+                .overlay(
+                    Capsule(style: .continuous)
+                        .strokeBorder(
+                            LinearGradient(
+                                colors: [Color.white.opacity(0.36), Color.primary.opacity(0.10)],
+                                startPoint: .top,
+                                endPoint: .bottom
+                            ),
+                            lineWidth: 0.75
+                        )
+                )
         } else {
             self
                 .background(Capsule(style: .continuous).fill(tint?.opacity(0.16) ?? Color.primary.opacity(0.07)))
@@ -186,11 +194,11 @@ extension View {
     @ViewBuilder
     func adaptiveGlassCircle(enabled: Bool) -> some View {
         if enabled {
-            if #available(macOS 26.0, *) {
-                self.glassEffect(.clear.interactive(), in: .circle)
-            } else {
-                self.background(Circle().fill(Color.primary.opacity(0.08)))
-            }
+            self
+                .background(Circle().fill(Color.primary.opacity(0.085)))
+                .overlay(
+                    Circle().strokeBorder(Color.white.opacity(0.28), lineWidth: 0.75)
+                )
         } else {
             self.background(Circle().fill(Color.primary.opacity(0.06)))
         }

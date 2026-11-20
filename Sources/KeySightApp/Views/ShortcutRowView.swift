@@ -1,23 +1,29 @@
 import SwiftUI
 import KeySightCore
 
+/// Per-row isolated hover state so moving the mouse across rows re-renders ONLY the hovered row
+/// instead of re-evaluating the entire HUD view tree.
+private final class RowHoverState: ObservableObject {
+    @Published var isHovered: Bool = false
+}
+
 struct ShortcutRowView: View {
     let item: ShortcutItem
     let isPinned: Bool
     let isMastered: Bool
     let isSelected: Bool
-    let isHovered: Bool
     var compact: Bool = false
     var glassStyle: Bool = false
 
-    let onHoverChanged: (Bool) -> Void
     let onExecute: () -> Void
     let onTogglePin: () -> Void
     let onToggleMastered: () -> Void
 
+    @StateObject private var hoverState = RowHoverState()
+
     var body: some View {
+        let isHovered = hoverState.isHovered
         HStack(spacing: 8) {
-            // Leading status dot / star
             if isPinned {
                 Image(systemName: "star.fill")
                     .font(.system(size: 9.5))
@@ -30,7 +36,6 @@ struct ShortcutRowView: View {
                     .frame(width: 12)
             }
 
-            // Title & optional subtitle
             VStack(alignment: .leading, spacing: 1.5) {
                 Text(item.title)
                     .font(.system(size: compact ? 12 : 12.5, weight: .medium))
@@ -53,7 +58,6 @@ struct ShortcutRowView: View {
 
             Spacer(minLength: 6)
 
-            // Hover / Selected quick action icons
             if isHovered || isSelected {
                 HStack(spacing: 4) {
                     actionButton(
@@ -77,10 +81,8 @@ struct ShortcutRowView: View {
                         )
                     }
                 }
-                .transition(.opacity)
             }
 
-            // Tactile keycaps
             KeycapClusterView(
                 combo: item.keyCombo,
                 isSelected: isSelected,
@@ -93,18 +95,20 @@ struct ShortcutRowView: View {
         .padding(.vertical, compact ? 3.5 : 6.5)
         .background(
             RoundedRectangle(cornerRadius: 8, style: .continuous)
-                .fill(backgroundColor)
+                .fill(backgroundColor(isHovered: isHovered))
         )
         .contentShape(Rectangle())
         .onHover { hovering in
-            onHoverChanged(hovering)
+            if hoverState.isHovered != hovering {
+                hoverState.isHovered = hovering
+            }
         }
         .onTapGesture {
             onExecute()
         }
     }
 
-    private var backgroundColor: Color {
+    private func backgroundColor(isHovered: Bool) -> Color {
         if isSelected {
             return Color.accentColor
         }

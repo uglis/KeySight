@@ -227,6 +227,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         styleRoot.submenu = styleMenu
         menu.addItem(styleRoot)
 
+        let ecoItem = NSMenuItem(
+            title: "常驻省电模式（仅长按 ⌘ 时启用液态玻璃）",
+            action: #selector(menuToggleEcoMode),
+            keyEquivalent: ""
+        )
+        ecoItem.target = self
+        ecoItem.state = viewModel.ecoPinnedMode ? .on : .off
+        menu.addItem(ecoItem)
+
         let enabledOnlyItem = NSMenuItem(
             title: "仅显示当前界面可用快捷键",
             action: #selector(menuToggleOnlyEnabled),
@@ -308,6 +317,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             viewModel.appearanceStyle = style
             viewModel.showToast("已切换外观：\(style.displayName)")
         }
+    }
+
+    @objc private func menuToggleEcoMode() {
+        viewModel.ecoPinnedMode.toggle()
+        viewModel.showToast(viewModel.ecoPinnedMode ? "已开启常驻省电模式" : "已关闭常驻省电模式")
     }
 
     @objc private func menuToggleOnlyEnabled() {

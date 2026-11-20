@@ -99,7 +99,24 @@ public final class AccessibilityScanner: Sendable {
         return true
     }
 
-    // MARK: - Menu Traversal
+    // MARK: - Menu Traversal (Batched AX IPC for minimal CPU & energy)
+
+    private static let menuItemAttributes: CFArray = [
+        kAXTitleAttribute as CFString,
+        kAXEnabledAttribute as CFString,
+        "AXMenuItemCmdChar" as CFString,
+        "AXMenuItemCmdVirtualKey" as CFString,
+        "AXMenuItemCmdGlyph" as CFString,
+        "AXMenuItemCmdModifiers" as CFString
+    ] as CFArray
+
+    /// Huge dynamic menus that almost never hold custom keyboard shortcuts; skip recursing deep into them.
+    private static let skippedSubmenuTitles: Set<String> = [
+        "书签", "Bookmarks", "最近打开", "最近使用", "Open Recent", "Recent",
+        "服务", "Services", "语音", "Speech", "替换", "Substitutions",
+        "转换", "Transformations", "听写", "Dictation", "自动填充", "AutoFill",
+        "写作工具", "Writing Tools", "共享", "Share"
+    ]
 
     private func collectMenuShortcuts(
         from menuElement: AXUIElement,
@@ -109,27 +126,32 @@ public final class AccessibilityScanner: Sendable {
         depth: Int,
         into results: inout [ShortcutItem]
     ) {
-        guard depth <= 3, results.count < 450 else { return }
+        guard depth <= 2, results.count < 320 else { return }
 
         let children = copyAXChildren(menuElement)
-        // Guard against massive dynamic folders (e.g., thousands of Safari bookmarks)
-        let cap = depth == 0 ? 120 : 60
+        let cap = depth == 0 ? 90 : 40
 
         for child in children.prefix(cap) {
-            guard results.count < 450 else { break }
+            guard results.count < 320 else { break }
 
-            let title = (copyStringAttribute(child, attribute: kAXTitleAttribute) ?? "")
+            // Fetch all 6 attributes in ONE single Mach IPC round-trip (6x fewer IPCs than separate calls!)
+            var valuesRef: CFArray?
+            let err = AXUIElementCopyMultipleAttributeValues(child, Self.menuItemAttributes, [], &valuesRef)
+            guard err == .success, let rawValues = valuesRef as? [Any], rawValues.count == 6 else {
+                continue
+            }
+
+            let title = (rawValues[0] as? String ?? "")
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             if title.isEmpty {
                 continue
             }
 
-            let isEnabled = copyBoolAttribute(child, attribute: kAXEnabledAttribute) ?? true
-
-            let cmdChar = copyStringAttribute(child, attribute: "AXMenuItemCmdChar")
-            let virtualKey = copyIntAttribute(child, attribute: "AXMenuItemCmdVirtualKey")
-            let glyph = copyIntAttribute(child, attribute: "AXMenuItemCmdGlyph")
-            let modifiersRaw = copyIntAttribute(child, attribute: "AXMenuItemCmdModifiers")
+            let isEnabled = (rawValues[1] as? Bool) ?? true
+            let cmdChar = rawValues[2] as? String
+            let virtualKey = (rawValues[3] as? NSNumber)?.intValue
+            let glyph = (rawValues[4] as? NSNumber)?.intValue
+            let modifiersRaw = (rawValues[5] as? NSNumber)?.intValue
 
             if let combo = KeyFormatting.buildKeyCombo(
                 cmdChar: cmdChar,
@@ -154,10 +176,12 @@ public final class AccessibilityScanner: Sendable {
                     priority: isEnabled ? 60 : 10
                 )
                 results.append(item)
+                // Items with a direct keyboard shortcut don't host submenus; skip child IPC lookup!
+                continue
             }
 
-            // Recurse into submenus (avoid traversing disabled or huge history menus)
-            if depth < 3 {
+            // Recurse into submenus only when item has no direct shortcut and isn't a huge dynamic menu
+            if depth < 2 && !Self.skippedSubmenuTitles.contains(title) {
                 let submenus = copyAXChildren(child)
                 for submenu in submenus {
                     let role = copyStringAttribute(submenu, attribute: kAXRoleAttribute)
